@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: mens-short-sleeve
+    runtime: node
+    plan: free
+    buildCommand: pnpm install --frozen-lockfile && pnpm run build
+    startCommand: NODE_ENV=production node dist/server.cjs
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: 22.12.0
+      - key: MAIZI_API_KEY
+        sync: false
+      - key: IMGBB_API_KEY
+        sync: false

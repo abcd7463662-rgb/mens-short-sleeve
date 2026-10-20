@@ -1,0 +1,7 @@
+{
+  "name": "电商商品与AI双色图改一体化工作台",
+  "description": "一体化业务工具：表格图片链接直接提取替换（专为黑白两色衣服设计，支持选择填入黑色或白色，默认填入黑色）与标准上架模板自动生成，自动将处理好的商品标题写入C列、英文翻译写入D列、所选颜色写入EE列、衣服图片链接写入FV列，并无损填充SPU与SKU矩阵。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

@@ -1,0 +1,787 @@
+import express from 'express';
+import path from 'path';
+import fs from 'fs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+/**
+ * Recursively search and extract GENERATED image URL or Base64 data from MaiziTech API response structure.
+ * CRITICAL: Must NEVER extract from 'params', 'input', 'request', or 'images' within params,
+ * which contain the user's original reference input image!
+ */
+function extractOutputImageUrl(data: any): string | null {
+  if (!data || typeof data !== 'object') return null;
+
+  // 1. MaiziTech explicit result fields (Highest priority)
+  // Example: "result_urls": ["https://cdn-yxu7zakna342.vultrcdn.com/results/api/2026/09/22/20260922_d39385d5dd.jpeg"]
+  if (Array.isArray(data.result_urls) && data.result_urls.length > 0) {
+    for (const url of data.result_urls) {
+      if (typeof url === 'string' && url.trim().length > 0) {
+        return url.trim();
+      }
+    }
+  }
+
+  // Example: "thumbnail_urls": ["https://..."]
+  if (Array.isArray(data.thumbnail_urls) && data.thumbnail_urls.length > 0) {
+    for (const url of data.thumbnail_urls) {
+      if (typeof url === 'string' && url.trim().length > 0) {
+        return url.trim();
+      }
+    }
+  }
+
+  if (typeof data.result_url === 'string' && data.result_url.trim()) {
+    return data.result_url.trim();
+  }
+
+  // 2. OpenAI-compatible format: data: [{ url: '...', b64_json: '...' }]
+  if (Array.isArray(data.data) && data.data.length > 0) {
+    for (const item of data.data) {
+      if (typeof item?.url === 'string' && item.url.trim()) return item.url.trim();
+      if (typeof item?.image_url === 'string' && item.image_url.trim()) return item.image_url.trim();
+      if (typeof item?.b64_json === 'string' && item.b64_json.trim()) {
+        return `data:image/png;base64,${item.b64_json.trim()}`;
+      }
+    }
+  }
+
+  // 3. Other known response containers (output, result, artifacts, generations)
+  // Exclude 'params' and 'input' to avoid picking up the user's original reference picture
+  const outputContainers = [
+    data.output,
+    data.result,
+    data.artifacts,
+    data.generations,
+    data.response,
+  ];
+
+  for (const container of outputContainers) {
+    if (!container) continue;
+
+    if (Array.isArray(container) && container.length > 0) {
+      for (const item of container) {
+        if (typeof item === 'string' && (item.startsWith('http://') || item.startsWith('https://') || item.startsWith('data:image/'))) {
+          return item.trim();
+        }
+        if (item && typeof item === 'object') {
+          const found = extractOutputImageUrl(item);
+          if (found) return found;
+        }
+      }
+    } else if (typeof container === 'object') {
+      const found = extractOutputImageUrl(container);
+      if (found) return found;
+    } else if (typeof container === 'string' && (container.startsWith('http://') || container.startsWith('https://') || container.startsWith('data:image/'))) {
+      return container.trim();
+    }
+  }
+
+  // 4. Direct top-level output keys (excluding params/input/prompt/model)
+  const directOutputKeys = ['url', 'image_url', 'imageUrl', 'download_url', 'file_url'];
+  for (const key of directOutputKeys) {
+    if (typeof data[key] === 'string') {
+      const val = data[key].trim();
+      if (val.startsWith('http://') || val.startsWith('https://') || val.startsWith('data:image/')) {
+        return val;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract task status, progress percentage, and error message
+ */
+function extractTaskStatus(data: any): { status: string; progress?: number; errorMsg?: string } {
+  if (!data || typeof data !== 'object') {
+    return { status: 'pending' };
+  }
+
+  const rawStatus = (
+    data.status ||
+    data.display_status ||
+    data.state ||
+    data.task_status ||
+    (Array.isArray(data.data) ? data.data[0]?.status : null) ||
+    data.task?.status ||
+    'pending'
+  )
+    .toString()
+    .toLowerCase()
+    .trim();
+
+  const progress = typeof data.progress === 'number' ? data.progress : undefined;
+  const errorMsg = data.error_msg || data.error?.message || data.message || undefined;
+
+  return { status: rawStatus, progress, errorMsg };
+}
+
+async function startServer() {
+  const app = express();
+  const PORT = Number(process.env.PORT) || 3000;
+
+  // Support JSON payload up to 50MB for image data URIs
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+  // Health check endpoint
+  app.get('/api/health', (req, res) => {
+    res.json({
+      status: 'ok',
+      hasMaiziKey: Boolean(process.env.MAIZI_API_KEY || process.env.MAIZITECH_API_KEY),
+    });
+  });
+
+  // Google Translate API endpoint (translates product titles to English for D6 column)
+  app.post('/api/translate', async (req, res) => {
+    try {
+      const { text, texts, targetLang = 'en', sourceLang = 'auto' } = req.body;
+
+      // Clean titles by thoroughly removing "舒适色彩", "安慰色彩", "棉", "®", "Comfort Colors", "Cotton" and variants, and enforce max 250 characters
+      const cleanChinese = (str: string) => {
+        let cleaned = (str || '')
+          .replace(/[®™\u00AE\u2122]/g, '')
+          .replace(/\([rR]\)|（[rR]）|\[[rR]\]|【[rR]】/g, '')
+          .replace(/舒\s*适\s*色\s*彩/gi, '')
+          .replace(/舒\s*适\s*颜\s*色/gi, '')
+          .replace(/舒\s*适\s*色/gi, '')
+          .replace(/安\s*慰\s*色\s*彩/gi, '')
+          .replace(/安\s*慰\s*颜\s*色/gi, '')
+          .replace(/安\s*慰\s*色/gi, '')
+          .replace(/\bcomfort\s*-?\s*colou?rs?\b/gi, '')
+          .replace(/comfortcolou?rs?/gi, '')
+          .replace(/\bcomfortable\s*colou?rs?\b/gi, '')
+          .replace(/100%\s*(纯棉|全棉|棉质|有机棉|棉)/gi, '')
+          .replace(/纯棉|全棉|棉质|有机棉|涤棉|精梳棉|水洗棉|针织棉|重磅棉|丝光棉|长绒棉/gi, '')
+          .replace(/棉/g, '')
+          .replace(/\b100%\s*(ringspun\s*|combed\s*|organic\s*|pure\s*|all\s*|heavyweight\s*)?cottons?\b/gi, '')
+          .replace(/\b(ringspun|combed|organic|pure|heavyweight)\s+cottons?\b/gi, '')
+          .replace(/\bcotton\s*blend\b/gi, '')
+          .replace(/\bcotton\s*poly\b/gi, '')
+          .replace(/\bcottons?\b/gi, '')
+          .replace(/\(\s*\)|\[\s*\]|【\s*】|（\s*）/g, '')
+          .replace(/[，,]{2,}/g, ', ')
+          .replace(/[-—]{2,}/g, '-')
+          .replace(/\s*[|/]\s*[|/]+/g, ' / ')
+          .replace(/\s*,\s*-\s*/g, ', ')
+          .replace(/\s*-\s*,\s*/g, ', ')
+          .replace(/\s{2,}/g, ' ')
+          .replace(/^[\s,，\-—_/|]+|[\s,，\-—_/|]+$/g, '')
+          .trim();
+
+        if (cleaned.length > 250) {
+          cleaned = cleaned.slice(0, 250).replace(/[\s,，\-—_/|]+$/g, '').trim();
+        }
+        return cleaned;
+      };
+
+      const cleanEnglish = (str: string) => {
+        let cleaned = (str || '')
+          .replace(/[®™\u00AE\u2122]/g, '')
+          .replace(/\([rR]\)|（[rR]）|\[[rR]\]|【[rR]】/g, '')
+          .replace(/\bcomfort\s*-?\s*colou?rs?\b/gi, '')
+          .replace(/\bcomfortable\s*colou?rs?\b/gi, '')
+          .replace(/\bsolace\s*colou?rs?\b/gi, '')
+          .replace(/\bconsolation\s*colou?rs?\b/gi, '')
+          .replace(/comfortcolou?rs?/gi, '')
+          .replace(/舒\s*适\s*色\s*彩/gi, '')
+          .replace(/舒\s*适\s*颜\s*色/gi, '')
+          .replace(/舒\s*适\s*色/gi, '')
+          .replace(/安\s*慰\s*色\s*彩/gi, '')
+          .replace(/安\s*慰\s*颜\s*色/gi, '')
+          .replace(/安\s*慰\s*色/gi, '')
+          .replace(/\b100%\s*(ringspun\s*|combed\s*|organic\s*|pure\s*|all\s*|heavyweight\s*)?cottons?\b/gi, '')
+          .replace(/\b(ringspun|combed|organic|pure|heavyweight)\s+cottons?\b/gi, '')
+          .replace(/\bcotton\s*blend\b/gi, '')
+          .replace(/\bcotton\s*poly\b/gi, '')
+          .replace(/\bcotton\s*\/\s*poly\b/gi, '')
+          .replace(/\bcotton\s*fabric\b/gi, '')
+          .replace(/\bcotton\s*material\b/gi, '')
+          .replace(/\bcottons?\b/gi, '')
+          .replace(/100%\s*(纯棉|全棉|棉质|有机棉|棉)/gi, '')
+          .replace(/纯棉|全棉|棉质|有机棉|涤棉|精梳棉|水洗棉|针织棉|重磅棉|丝光棉|长绒棉/gi, '')
+          .replace(/棉/g, '')
+          .replace(/\(\s*\)|\[\s*\]|【\s*】|（\s*）/g, '')
+          .replace(/[,，]{2,}/g, ', ')
+          .replace(/[-—]{2,}/g, '-')
+          .replace(/\s+,\s*/g, ', ')
+          .replace(/\s+-\s*-\s*/g, ' - ')
+          .replace(/\s*[|/]\s*[|/]+/g, ' / ')
+          .replace(/\s*,\s*-\s*/g, ', ')
+          .replace(/\s*-\s*,\s*/g, ', ')
+          .replace(/\s{2,}/g, ' ')
+          .replace(/^[\s,，\-—_/|]+|[\s,，\-—_/|]+$/g, '')
+          .trim();
+
+        if (cleaned.length > 250) {
+          cleaned = cleaned.slice(0, 250).replace(/[\s,，\-—_/|]+$/g, '').trim();
+        }
+        return cleaned;
+      };
+
+      // Helper function to translate a single text using Google Translate public API
+      const translateSingleText = async (queryText: string): Promise<string> => {
+        if (!queryText || !queryText.trim()) return '';
+        const trimmed = cleanChinese(queryText.trim());
+        if (!trimmed) return '';
+
+        let result = '';
+
+        // 1. Try Google Translate standard API (gtx client)
+        try {
+          const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(
+            sourceLang
+          )}&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(trimmed)}`;
+
+          const response = await fetch(url, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              Accept: 'application/json, text/plain, */*',
+            },
+          });
+
+          if (response.ok) {
+            const data: any = await response.json();
+            console.log('[Translate API] Response data:', JSON.stringify(data));
+            if (Array.isArray(data) && Array.isArray(data[0])) {
+              const fullTranslation = data[0]
+                .map((segment: any) => (Array.isArray(segment) ? segment[0] : ''))
+                .join('')
+                .trim();
+              if (fullTranslation) {
+                result = cleanEnglish(fullTranslation);
+                if (result) return result;
+              }
+            }
+          }
+        } catch (gtxErr) {
+          console.warn('[Google Translate GTX failed, trying fallback]:', gtxErr);
+        }
+
+        // 2. Try Google Translate Chrome Extension API fallback
+        try {
+          const dictUrl = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(
+            sourceLang
+          )}&tl=${encodeURIComponent(targetLang)}&q=${encodeURIComponent(trimmed)}`;
+
+          const dictResponse = await fetch(dictUrl, {
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          });
+
+          if (dictResponse.ok) {
+            const dictData: any = await dictResponse.json();
+            if (Array.isArray(dictData) && typeof dictData[0] === 'string' && dictData[0].trim()) {
+              result = cleanEnglish(dictData[0].trim());
+              if (result) return result;
+            } else if (typeof dictData === 'string' && dictData.trim()) {
+              result = cleanEnglish(dictData.trim());
+              if (result) return result;
+            }
+          }
+        } catch (dictErr) {
+          console.warn('[Google Translate Dict fallback failed]:', dictErr);
+        }
+
+        return cleanEnglish(trimmed);
+      };
+
+      if (Array.isArray(texts) && texts.length > 0) {
+        // Batch translation with concurrency limit of 5
+        const results: string[] = [];
+        const chunkSize = 5;
+        for (let i = 0; i < texts.length; i += chunkSize) {
+          const chunk = texts.slice(i, i + chunkSize);
+          const chunkResults = await Promise.all(chunk.map((t) => translateSingleText(String(t || ''))));
+          results.push(...chunkResults);
+        }
+
+        res.json({
+          success: true,
+          translations: results,
+          sourceCount: texts.length,
+        });
+        return;
+      }
+
+      if (typeof text === 'string') {
+        const translation = await translateSingleText(text);
+        res.json({
+          success: true,
+          translation,
+          originalText: text,
+          debug: { rawResponse: 'Google Translate response received' } // Simplified to prevent large data overhead
+        });
+        return;
+      }
+
+      res.status(400).json({ error: '请提供要翻译的 text 或 texts 数组' });
+    } catch (err: any) {
+      console.error('Error in /api/translate:', err);
+      res.status(500).json({
+        error: err.message || '谷歌翻译服务调用失败',
+      });
+    }
+  });
+
+  // 1. Submit async image generation/editing task
+  app.post('/api/image-modify/tasks', async (req, res) => {
+    try {
+      const apiKey = process.env.MAIZI_API_KEY || process.env.MAIZITECH_API_KEY;
+
+      if (!apiKey || !apiKey.trim() || apiKey === 'sk-your-api-key') {
+        res.status(400).json({
+          error: '缺少有效的 MAIZI_API_KEY 环境变量，请在平台设置（Settings / Secrets）中配置 MAIZI_API_KEY。',
+        });
+        return;
+      }
+
+      const { model, size, resolution, prompt, images, n, width, height, aspect_ratio } = req.body;
+
+      if (!prompt || typeof prompt !== 'string') {
+        res.status(400).json({ error: '请提供有效的修改提示词 (prompt)' });
+        return;
+      }
+
+      // 按照 gpt-image-2.5 接口标准与电商主图规格
+      const enforcedModel = model || 'gpt-image-2.5';
+      let enforcedPrompt = prompt.includes('不要更改商品背景')
+        ? prompt
+        : `${prompt}，不要更改商品背景，保持原图背景完全一致`;
+      if (!enforcedPrompt.includes('1340px*1785px')) {
+        enforcedPrompt = `${enforcedPrompt}，强制生成条件：图片分辨率及构图必须为 1340px*1785px (3:4 竖版电商主图标准比例)，主体与印花清晰`;
+      }
+
+      const requestPayload: any = {
+        model: enforcedModel,
+        prompt: enforcedPrompt,
+        n: 1,
+        size: size || '3:4',
+        resolution: resolution || (enforcedModel === 'gpt-image-2.5' ? '1K' : '2K'),
+      };
+
+      if (images && Array.isArray(images) && images.length > 0) {
+        requestPayload.images = images;
+      }
+
+      const response = await fetch('https://www.maizitech.ai/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload),
+      });
+
+      const responseText = await response.text();
+      let responseData: any;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        responseData = { text: responseText };
+      }
+
+      if (!response.ok) {
+        res.status(response.status).json({
+          error: responseData.error?.message || responseData.message || `提交任务失败 (${response.status})`,
+          raw: responseData,
+        });
+        return;
+      }
+
+      // Check if task_id was returned
+      let taskId = '';
+      const { status, progress } = extractTaskStatus(responseData);
+      const directImageUrl = extractOutputImageUrl(responseData);
+
+      if (Array.isArray(responseData?.data) && responseData.data.length > 0) {
+        const item = responseData.data[0];
+        if (item.task_id) {
+          taskId = item.task_id;
+        } else if (item.id) {
+          taskId = item.id;
+        }
+      } else if (responseData?.task_id) {
+        taskId = responseData.task_id;
+      } else if (responseData?.id) {
+        taskId = responseData.id;
+      }
+
+      // If direct image URL is returned without async waiting
+      if (directImageUrl && (!taskId || status === 'completed')) {
+        res.json({
+          success: true,
+          completed: true,
+          status: 'completed',
+          imageUrl: directImageUrl,
+          data: responseData,
+        });
+        return;
+      }
+
+      if (!taskId) {
+        if (directImageUrl) {
+          res.json({
+            success: true,
+            completed: true,
+            status: 'completed',
+            imageUrl: directImageUrl,
+            data: responseData,
+          });
+          return;
+        }
+
+        res.status(500).json({
+          error: '上游接口未返回有效的 task_id 或图片数据',
+          raw: responseData,
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        completed: false,
+        taskId,
+        status: status || 'pending',
+        progress,
+        raw: responseData,
+      });
+    } catch (err: any) {
+      console.error('Error in POST /api/image-modify/tasks:', err);
+      res.status(500).json({
+        error: err.message || '提交图片生成任务发生内部错误',
+      });
+    }
+  });
+
+  // 2. Poll task status: GET /api/image-modify/tasks/:taskId
+  app.get('/api/image-modify/tasks/:taskId', async (req, res) => {
+    try {
+      const apiKey = process.env.MAIZI_API_KEY || process.env.MAIZITECH_API_KEY;
+      const { taskId } = req.params;
+
+      if (!apiKey || !apiKey.trim() || apiKey === 'sk-your-api-key') {
+        res.status(400).json({
+          error: '缺少有效的 MAIZI_API_KEY 环境变量',
+        });
+        return;
+      }
+
+      if (!taskId) {
+        res.status(400).json({ error: '缺少 taskId 参数' });
+        return;
+      }
+
+      const response = await fetch(`https://www.maizitech.ai/v1/tasks/${taskId}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      });
+
+      const responseText = await response.text();
+      let responseData: any;
+      try {
+        responseData = JSON.parse(responseText);
+      } catch {
+        responseData = { text: responseText };
+      }
+
+      const { status: rawStatus, progress, errorMsg } = extractTaskStatus(responseData);
+      const imageUrl = extractOutputImageUrl(responseData);
+
+      console.log(`[Task Poll ${taskId}] status=${rawStatus}, progress=${progress ?? 'none'}, hasImage=${!!imageUrl}`);
+
+      let status = rawStatus;
+      // Mark as completed ONLY when status is terminal success OR when progress reaches 100 with an image URL
+      if (imageUrl && (rawStatus === 'completed' || rawStatus === 'succeeded' || rawStatus === 'success' || progress === 100)) {
+        status = 'completed';
+      }
+
+      const isFailed = status === 'failed' || status === 'violation' || status === 'error';
+      const failReason =
+        errorMsg ||
+        responseData.reason ||
+        (status === 'violation' ? '任务触发安全合规风控 (violation)' : '生成任务失败');
+
+      res.json({
+        success: !isFailed,
+        taskId,
+        status,
+        progress: progress ?? (status === 'completed' ? 100 : undefined),
+        imageUrl: isFailed ? null : imageUrl,
+        error: isFailed ? failReason : undefined,
+        raw: responseData,
+      });
+    } catch (err: any) {
+      console.error('Error in GET /api/image-modify/tasks/:taskId:', err);
+      res.status(500).json({
+        error: err.message || '查询任务状态发生内部错误',
+      });
+    }
+  });
+
+  // Local storage for padded 1340*1785 images
+  const HOSTED_IMAGES_DIR = path.join(process.cwd(), 'hosted_images_storage');
+  if (!fs.existsSync(HOSTED_IMAGES_DIR)) {
+    fs.mkdirSync(HOSTED_IMAGES_DIR, { recursive: true });
+  }
+
+  // Store padded 1340*1785 image
+  app.post('/api/hosted-images', async (req, res) => {
+    try {
+      const { imageBase64, filename } = req.body;
+      if (!imageBase64 || typeof imageBase64 !== 'string') {
+        res.status(400).json({ error: '缺少有效的图片 base64 数据' });
+        return;
+      }
+
+      const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+      const buffer = Buffer.from(cleanBase64, 'base64');
+      const fileId = filename || `img_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+      const filePath = path.join(HOSTED_IMAGES_DIR, fileId);
+
+      fs.writeFileSync(filePath, buffer);
+
+      const host = (req.headers['x-forwarded-host'] as string) || req.get('host') || 'localhost:3000';
+      const protocol = (req.headers['x-forwarded-proto'] as string) || (req.protocol === 'https' ? 'https' : 'http');
+      const publicUrl = `${protocol}://${host}/api/hosted-images/${fileId}`;
+
+      res.json({
+        success: true,
+        url: publicUrl,
+        relativePath: `/api/hosted-images/${fileId}`,
+        filename: fileId,
+      });
+    } catch (err: any) {
+      console.error('Error saving hosted image:', err);
+      res.status(500).json({ error: err.message || '保存图片失败' });
+    }
+  });
+
+  // Serve stored 1340*1785 image
+  app.get('/api/hosted-images/:filename', (req, res) => {
+    try {
+      const { filename } = req.params;
+      const safeFilename = path.basename(filename);
+      const filePath = path.join(HOSTED_IMAGES_DIR, safeFilename);
+
+      if (!fs.existsSync(filePath)) {
+        res.status(404).json({ error: '图片不存在或已过期' });
+        return;
+      }
+
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=31536000');
+
+      if (req.query.download === '1') {
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+      }
+
+      const fileStream = fs.createReadStream(filePath);
+      fileStream.pipe(res);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '读取图片失败' });
+    }
+  });
+
+  // Proxy remote image to prevent CORS or hotlinking issues on client
+  app.get('/api/proxy-image', async (req, res) => {
+    try {
+      const targetUrl = req.query.url as string;
+      if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
+        res.status(400).json({ error: '无效的图片 URL' });
+        return;
+      }
+
+      const response = await fetch(targetUrl);
+      if (!response.ok) {
+        res.status(response.status).json({ error: '获取远程图片失败' });
+        return;
+      }
+
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+
+      if (req.query.download === '1') {
+        res.setHeader('Content-Disposition', `attachment; filename="AI_Modified_${Date.now()}.jpg"`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      res.send(Buffer.from(arrayBuffer));
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '图片代理错误' });
+    }
+  });
+
+  // ImgBB upload proxy endpoint
+  app.post('/api/upload-imgbb', async (req, res) => {
+    try {
+      const { imageUrl, imageBase64, expiration, key } = req.body;
+      const apiKey = key || process.env.IMGBB_API_KEY || 'a22cdd4b6a277f7b71c92eac74487593';
+
+      let base64Data = imageBase64;
+      if (!base64Data && imageUrl) {
+        const imgRes = await fetch(imageUrl);
+        if (!imgRes.ok) {
+          res.status(400).json({ success: false, error: '无法获取要上传的图片' });
+          return;
+        }
+        const arrayBuf = await imgRes.arrayBuffer();
+        base64Data = Buffer.from(arrayBuf).toString('base64');
+      }
+
+      if (!base64Data) {
+        res.status(400).json({ success: false, error: '缺少图片数据或URL' });
+        return;
+      }
+
+      const cleanBase64 = base64Data.replace(/^data:image\/\w+;base64,/, '');
+
+      const formData = new URLSearchParams();
+      formData.append('key', apiKey);
+      formData.append('image', cleanBase64);
+      if (expiration) {
+        formData.append('expiration', String(expiration));
+      }
+
+      const uploadRes = await fetch('https://api.imgbb.com/1/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      const uploadJson = await uploadRes.json();
+      res.json(uploadJson);
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err.message || 'ImgBB 上传失败' });
+    }
+  });
+
+  // Legacy/Fallback API: POST /api/image-modify with server-side polling loop
+  app.post('/api/image-modify', async (req, res) => {
+    try {
+      const apiKey = process.env.MAIZI_API_KEY || process.env.MAIZITECH_API_KEY;
+
+      if (!apiKey || !apiKey.trim() || apiKey === 'sk-your-api-key') {
+        res.status(400).json({
+          error: '缺少有效的 MAIZI_API_KEY 环境变量，请在平台设置（Settings / Secrets）中配置 MAIZI_API_KEY。',
+        });
+        return;
+      }
+
+      const { model, size, resolution, prompt, images, n, width, height, aspect_ratio } = req.body;
+
+      if (!prompt || typeof prompt !== 'string') {
+        res.status(400).json({ error: '请提供有效的修改提示词 (prompt)' });
+        return;
+      }
+
+      const enforcedModel = model || 'gpt-image-2.5';
+      let enforcedPrompt = prompt.includes('不要更改商品背景')
+        ? prompt
+        : `${prompt}，不要更改商品背景，保持原图背景完全一致`;
+      if (!enforcedPrompt.includes('1340px*1785px')) {
+        enforcedPrompt = `${enforcedPrompt}，强制生成条件：图片分辨率及构图必须为 1340px*1785px (3:4 竖版电商主图标准比例)，主体与印花清晰`;
+      }
+
+      const requestPayload: any = {
+        model: enforcedModel,
+        prompt: enforcedPrompt,
+        n: 1,
+        size: size || '3:4',
+        resolution: resolution || (enforcedModel === 'gpt-image-2.5' ? '1K' : '2K'),
+      };
+
+      if (images && Array.isArray(images) && images.length > 0) {
+        requestPayload.images = images;
+      }
+
+      const submitRes = await fetch('https://www.maizitech.ai/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestPayload),
+      });
+
+      const submitData: any = await submitRes.json();
+      if (!submitRes.ok) {
+        res.status(submitRes.status).json({
+          error: submitData.error?.message || submitData.message || '提交任务失败',
+          raw: submitData,
+        });
+        return;
+      }
+
+      let taskId = '';
+      if (Array.isArray(submitData?.data) && submitData.data.length > 0 && submitData.data[0].task_id) {
+        taskId = submitData.data[0].task_id;
+      } else if (submitData?.task_id) {
+        taskId = submitData.task_id;
+      }
+
+      if (!taskId) {
+        // Direct image
+        res.json({ success: true, data: submitData });
+        return;
+      }
+
+      // Poll until completed, max 60 attempts (90s)
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const pollRes = await fetch(`https://www.maizitech.ai/v1/tasks/${taskId}`, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+        const pollData: any = await pollRes.json();
+        const pollStatus = (pollData.status || '').toLowerCase();
+
+        if (pollStatus === 'completed' || pollStatus === 'succeeded' || pollStatus === 'success') {
+          res.json({ success: true, data: pollData, taskId });
+          return;
+        }
+        if (pollStatus === 'failed' || pollStatus === 'violation') {
+          res.status(400).json({
+            error: pollData.error?.message || pollData.message || `任务执行失败 (${pollStatus})`,
+            raw: pollData,
+          });
+          return;
+        }
+      }
+
+      res.status(504).json({ error: '任务生成超时，请稍后使用 Task ID 重新查询', taskId });
+    } catch (err: any) {
+      console.error('Error in /api/image-modify:', err);
+      res.status(500).json({ error: err.message || '图片生成服务发生内部错误' });
+    }
+  });
+
+  // Vite middleware for development
+  if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();
