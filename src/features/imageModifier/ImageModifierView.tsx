@@ -47,6 +47,7 @@ import {
 } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
+import { saveTemplateFile, loadTemplateFile, clearTemplateFile } from '../../utils/templateStorage';
 
 export interface ProductItem {
   id: string;
@@ -90,6 +91,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [templateSavedAt, setTemplateSavedAt] = useState<number | null>(null);
 
   // 3. 处理与导出状态
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
@@ -234,17 +236,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       setProducts(items);
 
-      // 自动批量翻译
-      onShowToast('正在自动批量翻译商品标题...', 'info');
-      translateBatchTitlesWithGoogle(items.map(i => i.title))
-        .then((translations) => {
-          setProducts(prev => prev.map((p, idx) => ({ ...p, englishTitle: translations[idx] })));
-          onShowToast('所有商品标题自动翻译完成！', 'success');
-        })
-        .catch(() => {
-          onShowToast('自动翻译部分商品失败，可手动点击编辑标题触发重试', 'error');
-        });
-
       // 同步当前映射列覆盖状态
       setColumnOverrides({
         titleColIndex: res.detectedTitleColIndex,
@@ -260,8 +251,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         'success'
       );
 
-      // 自动触发缺失英文标题的谷歌翻译
-      autoTranslateTitles(items);
+      // 自动触发缺失英文标题的谷歌翻译（统一从这里发起，避免重复请求把接口打到限流）
+      await autoTranslateTitles(items);
     } catch (err: any) {
       onShowToast(err.message || '解析表格失败，请检查文件格式', 'error');
     } finally {
@@ -287,6 +278,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     if (needsTranslation.length === 0) return;
 
     setIsTranslatingAll(true);
+    onShowToast(`正在翻译 ${needsTranslation.length} 条商品标题，请稍候...`, 'info');
     try {
       const titles = needsTranslation.map((it) => it.title);
       const translations = await translateBatchTitlesWithGoogle(titles, 'en');
@@ -307,23 +299,59 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           return it;
         })
       );
+
+      const doneCount = translationMap.size;
+      const missingCount = needsTranslation.length - doneCount;
+      if (missingCount > 0) {
+        onShowToast(
+          `已翻译 ${doneCount} 条，仍有 ${missingCount} 条未成功（谷歌接口限流）。点击右下角「重新翻译」可重试。`,
+          'error'
+        );
+      } else {
+        onShowToast(`全部 ${doneCount} 条标题翻译完成！`, 'success');
+      }
     } catch (err) {
       console.warn('Batch translation warning:', err);
+      onShowToast('批量翻译失败，可点击「重新翻译」重试', 'error');
     } finally {
       setIsTranslatingAll(false);
     }
   };
 
   // --- 2. 模板导入 ---
-  const handleTemplateUpload = (file: File) => {
+  const handleTemplateUpload = async (file: File) => {
     setTemplateFile(file);
-    onShowToast(`已成功载入自定义上架底表: ${file.name}（数据将写入第 2 个工作表）`, 'success');
+    setTemplateSavedAt(Date.now());
+    onShowToast(`已成功载入自定义上架底表: ${file.name}（已保存到本机，下次自动载入）`, 'success');
+
+    try {
+      await saveTemplateFile(file);
+    } catch (err) {
+      console.warn('保存模板到本机失败:', err);
+      setTemplateSavedAt(null);
+      onShowToast('底表已载入，但未能保存到本机（浏览器存储不可用），下次需重新上传', 'error');
+    }
   };
 
-  const handleResetTemplate = () => {
+  const handleResetTemplate = async () => {
     setTemplateFile(null);
-    onShowToast('已重置为系统内置标准模板', 'info');
+    setTemplateSavedAt(null);
+    await clearTemplateFile();
+    onShowToast('已重置为系统内置标准模板，本机保存的底表也已清除', 'info');
   };
+
+  // 页面打开时恢复上次保存的底表
+  useEffect(() => {
+    let cancelled = false;
+    loadTemplateFile().then((saved) => {
+      if (cancelled || !saved) return;
+      setTemplateFile((prev) => prev ?? saved.file);
+      setTemplateSavedAt((prev) => prev ?? saved.savedAt);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // 保存图片链接修改
   const handleSaveUrlEdit = () => {
@@ -824,7 +852,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     <FileSpreadsheet className="w-5 h-5 text-purple-600 shrink-0" />
                     <div className="truncate">
                       <p className="text-xs font-bold text-slate-800 truncate">{templateFile.name}</p>
-                      <p className="text-[11px] text-slate-500">已载入自定义上架底表</p>
+                      <p className="text-[11px] text-slate-500">
+                        {templateSavedAt
+                          ? `已保存在本机，${new Date(templateSavedAt).toLocaleString('zh-CN', {
+                              month: '2-digit',
+                              day: '2-digit',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })} 保存`
+                          : '已载入自定义上架底表（未保存到本机）'}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">

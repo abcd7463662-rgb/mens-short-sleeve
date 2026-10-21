@@ -5,6 +5,50 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
+const GOOGLE_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// Translated titles are cached because a sheet almost always repeats the same
+// title across colors/sizes. This keeps a 300-row sheet at a few dozen real calls.
+const translationCache = new Map<string, string>();
+const TRANSLATION_CACHE_LIMIT = 5000;
+
+function rememberTranslation(key: string, value: string) {
+  if (translationCache.size >= TRANSLATION_CACHE_LIMIT) {
+    const oldest = translationCache.keys().next().value;
+    if (oldest !== undefined) translationCache.delete(oldest);
+  }
+  translationCache.set(key, value);
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Google's public endpoints answer HTTP 429 as soon as a handful of requests
+ * overlap, and the failure is silent (it just returns the source text). Keep the
+ * whole server at two in-flight calls and queue the rest.
+ */
+const runWithTranslateSlot = (() => {
+  const limit = 2;
+  let available = limit;
+  const waiters: Array<() => void> = [];
+
+  return async function run<T>(task: () => Promise<T>): Promise<T> {
+    if (available > 0) {
+      available -= 1;
+    } else {
+      await new Promise<void>((resolve) => waiters.push(resolve));
+    }
+    try {
+      return await task();
+    } finally {
+      const next = waiters.shift();
+      if (next) next();
+      else available += 1;
+    }
+  };
+})();
+
 /**
  * Recursively search and extract GENERATED image URL or Base64 data from MaiziTech API response structure.
  * CRITICAL: Must NEVER extract from 'params', 'input', 'request', or 'images' within params,
@@ -222,102 +266,127 @@ async function startServer() {
         return cleaned;
       };
 
-      // Helper function to translate a single text using Google Translate public API
+      // One call to Google. Returns null when Google throttled or answered with
+      // something unusable, so the caller can retry instead of silently
+      // shipping the Chinese source text as the "translation".
+      const callGoogle = async (textValue: string, endpoint: 'gtx' | 'dict'): Promise<string | null> => {
+        const url =
+          endpoint === 'gtx'
+            ? `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(
+                sourceLang
+              )}&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(textValue)}`
+            : `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(
+                sourceLang
+              )}&tl=${encodeURIComponent(targetLang)}&q=${encodeURIComponent(textValue)}`;
+
+        const response = await fetch(url, {
+          headers: { 'User-Agent': GOOGLE_UA, Accept: 'application/json, text/plain, */*' },
+          signal: AbortSignal.timeout(15000),
+        });
+
+        if (response.status === 429 || response.status === 403 || response.status >= 500) {
+          return null;
+        }
+        if (!response.ok) return null;
+
+        const data: any = await response.json();
+
+        if (endpoint === 'gtx') {
+          if (!Array.isArray(data) || !Array.isArray(data[0])) return null;
+          const joined = data[0]
+            .map((segment: any) => (Array.isArray(segment) ? segment[0] : ''))
+            .join('')
+            .trim();
+          return joined ? cleanEnglish(joined) || null : null;
+        }
+
+        if (Array.isArray(data) && typeof data[0] === 'string' && data[0].trim()) {
+          return cleanEnglish(data[0].trim()) || null;
+        }
+        if (typeof data === 'string' && data.trim()) {
+          return cleanEnglish(data.trim()) || null;
+        }
+        return null;
+      };
+
+      // Translate a single text, retrying with backoff. Throws if Google stays
+      // unhappy so the batch handler can report it instead of faking success.
       const translateSingleText = async (queryText: string): Promise<string> => {
         if (!queryText || !queryText.trim()) return '';
         const trimmed = cleanChinese(queryText.trim());
         if (!trimmed) return '';
 
-        let result = '';
+        const cacheKey = `${targetLang}::${trimmed}`;
+        const cached = translationCache.get(cacheKey);
+        if (cached) return cached;
 
-        // 1. Try Google Translate standard API (gtx client)
-        try {
-          const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${encodeURIComponent(
-            sourceLang
-          )}&tl=${encodeURIComponent(targetLang)}&dt=t&q=${encodeURIComponent(trimmed)}`;
+        let lastError: unknown = null;
 
-          const response = await fetch(url, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-              Accept: 'application/json, text/plain, */*',
-            },
-          });
+        for (let attempt = 0; attempt < 4; attempt++) {
+          if (attempt > 0) await sleep(400 * 2 ** (attempt - 1) + Math.random() * 250);
 
-          if (response.ok) {
-            const data: any = await response.json();
-            console.log('[Translate API] Response data:', JSON.stringify(data));
-            if (Array.isArray(data) && Array.isArray(data[0])) {
-              const fullTranslation = data[0]
-                .map((segment: any) => (Array.isArray(segment) ? segment[0] : ''))
-                .join('')
-                .trim();
-              if (fullTranslation) {
-                result = cleanEnglish(fullTranslation);
-                if (result) return result;
+          for (const endpoint of ['gtx', 'dict'] as const) {
+            try {
+              const translated = await runWithTranslateSlot(() => callGoogle(trimmed, endpoint));
+              if (translated) {
+                rememberTranslation(cacheKey, translated);
+                return translated;
               }
+            } catch (err) {
+              lastError = err;
             }
           }
-        } catch (gtxErr) {
-          console.warn('[Google Translate GTX failed, trying fallback]:', gtxErr);
         }
 
-        // 2. Try Google Translate Chrome Extension API fallback
-        try {
-          const dictUrl = `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=${encodeURIComponent(
-            sourceLang
-          )}&tl=${encodeURIComponent(targetLang)}&q=${encodeURIComponent(trimmed)}`;
-
-          const dictResponse = await fetch(dictUrl, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-          });
-
-          if (dictResponse.ok) {
-            const dictData: any = await dictResponse.json();
-            if (Array.isArray(dictData) && typeof dictData[0] === 'string' && dictData[0].trim()) {
-              result = cleanEnglish(dictData[0].trim());
-              if (result) return result;
-            } else if (typeof dictData === 'string' && dictData.trim()) {
-              result = cleanEnglish(dictData.trim());
-              if (result) return result;
-            }
-          }
-        } catch (dictErr) {
-          console.warn('[Google Translate Dict fallback failed]:', dictErr);
-        }
-
-        return cleanEnglish(trimmed);
+        throw new Error(
+          `谷歌翻译接口暂时不可用（重试 4 次仍未成功）${
+            lastError instanceof Error ? `: ${lastError.message}` : ''
+          }`
+        );
       };
 
       if (Array.isArray(texts) && texts.length > 0) {
-        // Batch translation with concurrency limit of 5
-        const results: string[] = [];
-        const chunkSize = 5;
-        for (let i = 0; i < texts.length; i += chunkSize) {
-          const chunk = texts.slice(i, i + chunkSize);
-          const chunkResults = await Promise.all(chunk.map((t) => translateSingleText(String(t || ''))));
-          results.push(...chunkResults);
+        const results: string[] = new Array(texts.length).fill('');
+        const failed: number[] = [];
+
+        for (let i = 0; i < texts.length; i++) {
+          const source = String(texts[i] ?? '');
+          if (!source.trim()) {
+            results[i] = '';
+            continue;
+          }
+          try {
+            results[i] = await translateSingleText(source);
+          } catch {
+            failed.push(i);
+          }
+        }
+
+        // Second pass over the stragglers: the throttle window has usually
+        // cleared by now, and this is what turns "many titles untranslated"
+        // into a clean result.
+        for (const i of [...failed]) {
+          await sleep(600);
+          try {
+            results[i] = await translateSingleText(String(texts[i] ?? ''));
+            failed.splice(failed.indexOf(i), 1);
+          } catch {
+            results[i] = '';
+          }
         }
 
         res.json({
           success: true,
           translations: results,
           sourceCount: texts.length,
+          failedIndexes: failed,
         });
         return;
       }
 
       if (typeof text === 'string') {
         const translation = await translateSingleText(text);
-        res.json({
-          success: true,
-          translation,
-          originalText: text,
-          debug: { rawResponse: 'Google Translate response received' } // Simplified to prevent large data overhead
-        });
+        res.json({ success: true, translation, originalText: text });
         return;
       }
 

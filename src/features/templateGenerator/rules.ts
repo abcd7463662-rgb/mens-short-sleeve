@@ -172,6 +172,33 @@ export interface ProductTemplateInput {
 }
 
 /**
+ * 生成 SPU 编码：固定前缀 017 + 9 位随机数字，共 12 位。
+ * 以字符串写入 B 列，Excel 不会吞掉前导 0。
+ */
+export function generateSpuCode(): string {
+  let digits = '';
+  for (let i = 0; i < 9; i++) {
+    digits += Math.floor(Math.random() * 10).toString();
+  }
+  return `017${digits}`;
+}
+
+/**
+ * 为同一次导出生成互不重复的 SPU 编码，避免随机碰撞
+ */
+function generateUniqueSpuCodes(count: number): string[] {
+  const used = new Set<string>();
+  const codes: string[] = [];
+  for (let i = 0; i < count; i++) {
+    let code = generateSpuCode();
+    while (used.has(code)) code = generateSpuCode();
+    used.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+/**
  * 构建多商品整合的完整模板写入规则：
  * - 仅针对黑色与白色衣服（默认填入黑色）
  * - 支持选择：填入黑色（1行SPU + 5行黑色SKU）、填入白色（1行SPU + 5行白色SKU）、或黑白双色（1行SPU + 10行SKU）
@@ -195,8 +222,10 @@ export function buildMultiProductTemplateRules(
 
   const allRules: CellRule[] = [];
   let currentRow = 6;
+  const spuCodes = generateUniqueSpuCodes(products.length);
 
   products.forEach((prod, k) => {
+    const spuCode = spuCodes[k];
     const rawTitle = prod.title?.trim() || `商品_${k + 1}`;
     const pTitle = cleanChineseTitle(rawTitle) || truncateTitle(rawTitle, 250);
     const pEnglishTitle = prod.englishTitle?.trim() || pTitle;
@@ -229,14 +258,21 @@ export function buildMultiProductTemplateRules(
     const firstColorName = COLOR_NAMES[firstColor] || '黑色';
     const firstImageUrl = getImageUrl(firstColor);
 
-    // 1. SPU 行
+    // 1. SPU 行（B 列改为每个 SPU 独立的 017 编码，替换默认年份值）
     TEMPLATE_ROW6_RULES.forEach((r) => {
+      if (r.column === 'B') return;
       allRules.push({
         cell: `${r.column}${spuRow}`,
         column: r.column,
         value: r.value,
         category: `商品${k + 1} SPU ${r.category}`,
       });
+    });
+    allRules.push({
+      cell: `B${spuRow}`,
+      column: 'B',
+      value: spuCode,
+      category: `商品${k + 1} SPU 编码(B列)`,
     });
 
     // SPU 标题 (C 列)
@@ -315,10 +351,10 @@ export function buildMultiProductTemplateRules(
           category: `商品${k + 1}英文标题(D列)`,
         });
 
-        // SKU 基础属性与年份
+        // SKU 基础属性与年份（B 列沿用所属 SPU 的编码）
         allRules.push(
           { cell: `A${row}`, column: 'A', value: 'sku', category: 'SKU类型' },
-          { cell: `B${row}`, column: 'B', value: 2026, category: '年份属性' },
+          { cell: `B${row}`, column: 'B', value: spuCode, category: 'SPU编码(B列)' },
           { cell: `ED${row}`, column: 'ED', value: 2026, category: 'SKC年份' },
           { cell: `EE${row}`, column: 'EE', value: colorName, category: '颜色属性' },
           { cell: `EF${row}`, column: 'EF', value: '尺码', category: '尺码规格' },
