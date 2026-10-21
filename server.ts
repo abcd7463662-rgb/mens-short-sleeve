@@ -179,6 +179,48 @@ async function startServer() {
     });
   });
 
+  // Diagnostics for the Google Translate upstream: run this when titles stop
+  // translating to see whether Google is throttling this server's egress IP.
+  app.get('/api/translate/diag', async (req, res) => {
+    const sample = '男士纯棉短袖T恤 白色圆领';
+    const targets = [
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(
+        sample
+      )}`,
+      `https://clients5.google.com/translate_a/t?client=dict-chrome-ex&sl=auto&tl=en&q=${encodeURIComponent(
+        sample
+      )}`,
+    ];
+
+    const results = await Promise.all(
+      targets.map(async (url) => {
+        const startedAt = Date.now();
+        try {
+          const response = await fetch(url, {
+            headers: { 'User-Agent': GOOGLE_UA, Accept: 'application/json, text/plain, */*' },
+            signal: AbortSignal.timeout(15000),
+          });
+          const body = await response.text();
+          return {
+            host: new URL(url).host,
+            status: response.status,
+            ms: Date.now() - startedAt,
+            bodyPreview: body.slice(0, 200),
+          };
+        } catch (err: any) {
+          return {
+            host: new URL(url).host,
+            status: null,
+            ms: Date.now() - startedAt,
+            error: err?.message || String(err),
+          };
+        }
+      })
+    );
+
+    res.json({ cachedEntries: translationCache.size, results });
+  });
+
   // Google Translate API endpoint (translates product titles to English for D6 column)
   app.post('/api/translate', async (req, res) => {
     try {
