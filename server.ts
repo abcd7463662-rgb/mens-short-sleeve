@@ -26,13 +26,14 @@ const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
 /**
  * 上架目标模板的持久化存储。
  *
- * 磁盘目录 template_storage 同时是仓库里的一个目录，所以提交进去的模板在每次
- * 重新部署后依然存在（Render 的运行时文件系统是临时的）。若配置了
- * GITHUB_TOKEN，上传的新模板会自动提交回仓库，做到长期保存。
+ * Render 的运行时磁盘是临时的，重新部署就被清空，所以真正的长期存储是 GitHub
+ * 仓库里的 template-store 分支（单独分支，提交不会触发重新部署）。
+ * 磁盘上的 template_storage/ 只是当前进程的快速副本。
  */
 const TEMPLATE_DIR = path.join(process.cwd(), 'template_storage');
 const TEMPLATE_FILE = path.join(TEMPLATE_DIR, 'template.xlsx');
 const TEMPLATE_META = path.join(TEMPLATE_DIR, 'meta.json');
+const STORE_BRANCH = 'template-store';
 
 interface TemplateMeta {
   name: string;
@@ -55,45 +56,115 @@ function readTemplateMeta(): TemplateMeta | null {
   }
 }
 
+function writeTemplateLocally(buffer: Buffer, meta: TemplateMeta) {
+  ensureTemplateDir();
+  fs.writeFileSync(TEMPLATE_FILE, buffer);
+  fs.writeFileSync(TEMPLATE_META, JSON.stringify(meta, null, 2));
+}
+
+const githubConfigured = () => Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO);
+
+function githubHeaders(token: string) {
+  return {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/vnd.github+json',
+    'User-Agent': 'mens-short-sleeve-app',
+    'Content-Type': 'application/json',
+  };
+}
+
+/** 读取仓库某个分支上的文件，不存在返回 null */
+async function readGithubFile(
+  filePath: string
+): Promise<{ sha: string; buffer: Buffer } | null> {
+  const token = process.env.GITHUB_TOKEN as string;
+  const repo = process.env.GITHUB_REPO as string;
+  const url = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${STORE_BRANCH}`;
+
+  const res = await fetch(url, { headers: githubHeaders(token) });
+  if (!res.ok) return null;
+
+  const data: any = await res.json();
+  if (!data?.content) return null;
+  return { sha: data.sha, buffer: Buffer.from(data.content, 'base64') };
+}
+
+/** 确保 template-store 分支存在（从 main 的最新提交拉出来，不触发重新部署） */
+async function ensureStoreBranch(): Promise<boolean> {
+  const token = process.env.GITHUB_TOKEN as string;
+  const repo = process.env.GITHUB_REPO as string;
+  const headers = githubHeaders(token);
+
+  const branchRes = await fetch(
+    `https://api.github.com/repos/${repo}/branches/${STORE_BRANCH}`,
+    { headers }
+  );
+  if (branchRes.ok) return true;
+  if (branchRes.status !== 404) return false;
+
+  const mainRes = await fetch(`https://api.github.com/repos/${repo}/branches/main`, { headers });
+  if (!mainRes.ok) return false;
+  const mainData: any = await mainRes.json();
+  const sha = mainData?.commit?.sha;
+  if (!sha) return false;
+
+  const createRes = await fetch(`https://api.github.com/repos/${repo}/git/refs`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ ref: `refs/heads/${STORE_BRANCH}`, sha }),
+  });
+  // 422 表示分支已存在，同样可接受
+  return createRes.ok || createRes.status === 422;
+}
+
+/** 写文件到 template-store 分支 */
+async function writeGithubFile(
+  filePath: string,
+  contentBase64: string,
+  message: string
+): Promise<void> {
+  const token = process.env.GITHUB_TOKEN as string;
+  const repo = process.env.GITHUB_REPO as string;
+  const headers = githubHeaders(token);
+  const url = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+
+  const existing = await readGithubFile(filePath);
+
+  const response = await fetch(url, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      message,
+      content: contentBase64,
+      sha: existing?.sha,
+      branch: STORE_BRANCH,
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`GitHub 提交失败 (${response.status}): ${detail.slice(0, 200)}`);
+  }
+}
+
 /**
- * 把模板提交回 GitHub 仓库，让它在重新部署后仍然存在。
- * 未配置 GITHUB_TOKEN / GITHUB_REPO 时静默跳过，只保留磁盘副本。
+ * 把模板提交到 template-store 分支，做到跨重新部署、跨设备长期保存。
+ * 未配置 GITHUB_TOKEN / GITHUB_REPO 时返回 false，只保留磁盘副本。
  */
 async function backupTemplateToGitHub(base64: string, meta: TemplateMeta): Promise<boolean> {
-  const token = process.env.GITHUB_TOKEN;
-  const repo = process.env.GITHUB_REPO;
-  if (!token || !repo) return false;
-
-  const put = async (filePath: string, contentBase64: string, message: string) => {
-    const url = `https://api.github.com/repos/${repo}/contents/${filePath}`;
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'mens-short-sleeve-app',
-      'Content-Type': 'application/json',
-    };
-
-    let sha: string | undefined;
-    const existing = await fetch(url, { headers });
-    if (existing.ok) {
-      const data: any = await existing.json();
-      sha = data?.sha;
-    }
-
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify({ message, content: contentBase64, sha, branch: 'main' }),
-    });
-    if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(`GitHub 提交失败 (${response.status}): ${detail.slice(0, 200)}`);
-    }
-  };
+  if (!githubConfigured()) return false;
 
   try {
-    await put('template_storage/template.xlsx', base64, `chore: update upload template (${meta.name})`);
-    await put(
+    if (!(await ensureStoreBranch())) {
+      console.error('[Template backup] 无法创建或访问 template-store 分支');
+      return false;
+    }
+
+    await writeGithubFile(
+      'template_storage/template.xlsx',
+      base64,
+      `chore: update upload template (${meta.name})`
+    );
+    await writeGithubFile(
       'template_storage/meta.json',
       Buffer.from(JSON.stringify(meta, null, 2), 'utf8').toString('base64'),
       `chore: update template metadata (${meta.name})`
@@ -103,6 +174,64 @@ async function backupTemplateToGitHub(base64: string, meta: TemplateMeta): Promi
     console.error('[Template backup] GitHub 提交失败:', err?.message || err);
     return false;
   }
+}
+
+/**
+ * 磁盘上没有模板时，从 template-store 分支恢复。
+ * 返回是否恢复了文件。
+ */
+async function restoreTemplateFromGitHub(): Promise<boolean> {
+  if (!githubConfigured()) return false;
+  if (fs.existsSync(TEMPLATE_FILE)) return true;
+
+  try {
+    const file = await readGithubFile('template_storage/template.xlsx');
+    if (!file) return false;
+
+    const metaFile = await readGithubFile('template_storage/meta.json');
+    let meta: TemplateMeta = {
+      name: 'template.xlsx',
+      savedAt: new Date().toISOString(),
+      size: file.buffer.length,
+    };
+    if (metaFile) {
+      try {
+        meta = JSON.parse(metaFile.buffer.toString('utf8')) as TemplateMeta;
+      } catch {
+        // 元数据损坏时用上面的默认值
+      }
+    }
+
+    writeTemplateLocally(file.buffer, meta);
+    console.log(`[Template] 已从 GitHub ${STORE_BRANCH} 分支恢复模板: ${meta.name}`);
+    return true;
+  } catch (err: any) {
+    console.error('[Template restore] 从 GitHub 恢复失败:', err?.message || err);
+    return false;
+  }
+}
+
+// 并发请求共用同一次恢复；失败后短暂冷却，避免每次请求都打 GitHub
+let restorePromise: Promise<boolean> | null = null;
+let lastRestoreFailureAt = 0;
+const RESTORE_RETRY_MS = 60_000;
+
+async function restoreTemplateOnce(): Promise<boolean> {
+  if (fs.existsSync(TEMPLATE_FILE)) return true;
+  if (!githubConfigured()) return false;
+  if (Date.now() - lastRestoreFailureAt < RESTORE_RETRY_MS) return false;
+
+  if (!restorePromise) {
+    restorePromise = restoreTemplateFromGitHub()
+      .then((restored) => {
+        if (!restored) lastRestoreFailureAt = Date.now();
+        return restored;
+      })
+      .finally(() => {
+        restorePromise = null;
+      });
+  }
+  return restorePromise;
 }
 
 /**
@@ -263,8 +392,13 @@ async function startServer() {
 
   // --- 上架目标模板：服务端持久化 ---
   ensureTemplateDir();
+  // 启动时预热：磁盘被重新部署清空的话，这里就把 GitHub 上的备份拉回来
+  void restoreTemplateOnce();
 
-  app.get('/api/template', (req, res) => {
+  app.get('/api/template', async (req, res) => {
+    // 磁盘是临时的，重新部署后第一次访问时把 GitHub 上的备份拉回来
+    await restoreTemplateOnce();
+
     if (!fs.existsSync(TEMPLATE_FILE)) {
       res.json({ exists: false });
       return;
@@ -275,11 +409,13 @@ async function startServer() {
       name: meta?.name || 'saved-template.xlsx',
       savedAt: meta?.savedAt || fs.statSync(TEMPLATE_FILE).mtime.toISOString(),
       size: fs.statSync(TEMPLATE_FILE).size,
-      backupToGitHub: Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
+      backupToGitHub: githubConfigured(),
     });
   });
 
-  app.get('/api/template/file', (req, res) => {
+  app.get('/api/template/file', async (req, res) => {
+    await restoreTemplateOnce();
+
     if (!fs.existsSync(TEMPLATE_FILE)) {
       res.status(404).json({ error: '尚未保存上架模板' });
       return;
@@ -311,15 +447,12 @@ async function startServer() {
         return;
       }
 
-      ensureTemplateDir();
-      fs.writeFileSync(TEMPLATE_FILE, buffer);
-
       const meta: TemplateMeta = {
         name: filename || 'template.xlsx',
         savedAt: new Date().toISOString(),
         size: buffer.length,
       };
-      fs.writeFileSync(TEMPLATE_META, JSON.stringify(meta, null, 2));
+      writeTemplateLocally(buffer, meta);
 
       const backedUp = await backupTemplateToGitHub(buffer.toString('base64'), meta);
 
@@ -340,6 +473,26 @@ async function startServer() {
     try {
       if (fs.existsSync(TEMPLATE_FILE)) fs.unlinkSync(TEMPLATE_FILE);
       if (fs.existsSync(TEMPLATE_META)) fs.unlinkSync(TEMPLATE_META);
+
+      // 同步删掉 GitHub 备份，否则下一次读取又会恢复回来
+      if (githubConfigured()) {
+        const token = process.env.GITHUB_TOKEN as string;
+        const repo = process.env.GITHUB_REPO as string;
+        for (const filePath of ['template_storage/template.xlsx', 'template_storage/meta.json']) {
+          const existing = await readGithubFile(filePath);
+          if (!existing) continue;
+          await fetch(`https://api.github.com/repos/${repo}/contents/${filePath}`, {
+            method: 'DELETE',
+            headers: githubHeaders(token),
+            body: JSON.stringify({
+              message: `chore: clear upload template (${filePath.split('/').pop()})`,
+              sha: existing.sha,
+              branch: STORE_BRANCH,
+            }),
+          });
+        }
+      }
+      lastRestoreFailureAt = 0;
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '清除模板失败' });

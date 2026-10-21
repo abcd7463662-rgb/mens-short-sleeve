@@ -346,13 +346,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     if (serverResult) {
       onShowToast(
         serverResult.backedUp
-          ? `底表「${file.name}」已永久保存（服务器 + GitHub 备份），以后无需再次上传`
+          ? `底表「${file.name}」已永久保存到 GitHub，换设备、重新部署都不会丢`
           : `底表「${file.name}」已保存到服务器，以后打开自动载入`,
         'success'
       );
     } else {
       onShowToast(
-        `底表「${file.name}」已保存在本机，但未能同步到服务器（网络问题），下次打开仍可使用`,
+        `底表「${file.name}」已保存在本机，但未能同步到服务器，下次打开仍可使用`,
         'error'
       );
     }
@@ -363,7 +363,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     setTemplateSavedAt(null);
     await clearTemplateFile();
     await deleteServerTemplate();
-    onShowToast('已重置为系统内置标准模板，本机与服务器保存的底表均已清除', 'info');
+    onShowToast('已重置为系统内置标准模板，本机、服务器与 GitHub 备份均已清除', 'info');
   };
 
   // 页面打开时恢复上次保存的底表
