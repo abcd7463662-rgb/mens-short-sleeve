@@ -347,7 +347,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(
         serverResult.backedUp
           ? `底表「${file.name}」已永久保存到 GitHub，换设备、重新部署都不会丢`
-          : `底表「${file.name}」已保存到服务器，以后打开自动载入`,
+          : serverResult.backupConfigured
+          ? `底表「${file.name}」已保存，但 GitHub 备份失败，可稍后重新上传一次`
+          : `底表「${file.name}」已保存到服务器。当前未配置 GitHub 备份，重新部署后仍在，需要长期保存请按说明配置`,
         'success'
       );
     } else {

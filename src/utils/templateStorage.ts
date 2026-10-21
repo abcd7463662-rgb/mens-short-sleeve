@@ -94,8 +94,13 @@ export async function fetchServerTemplateInfo(): Promise<ServerTemplateInfo | nu
   }
 }
 
+export interface UploadTemplateResult {
+  backedUp: boolean;
+  backupConfigured: boolean;
+}
+
 /** 把模板上传到服务器保存，返回是否成功备份到 GitHub */
-export async function uploadTemplateToServer(file: File): Promise<{ backedUp: boolean } | null> {
+export async function uploadTemplateToServer(file: File): Promise<UploadTemplateResult | null> {
   try {
     const fileBase64 = await blobToBase64(file);
     const res = await fetch('/api/template', {
@@ -105,7 +110,10 @@ export async function uploadTemplateToServer(file: File): Promise<{ backedUp: bo
     });
     if (!res.ok) return null;
     const data = await res.json();
-    return { backedUp: Boolean(data?.backedUp) };
+    return {
+      backedUp: Boolean(data?.backedUp),
+      backupConfigured: Boolean(data?.backupConfigured),
+    };
   } catch {
     return null;
   }

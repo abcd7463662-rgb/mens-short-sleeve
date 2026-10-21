@@ -462,6 +462,7 @@ async function startServer() {
         savedAt: meta.savedAt,
         size: meta.size,
         backedUp,
+        backupConfigured: githubConfigured(),
       });
     } catch (err: any) {
       console.error('Error in POST /api/template:', err);
