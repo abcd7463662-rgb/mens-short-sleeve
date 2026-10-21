@@ -281,7 +281,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     onShowToast(`正在翻译 ${needsTranslation.length} 条商品标题，请稍候...`, 'info');
     try {
       const titles = needsTranslation.map((it) => it.title);
-      const translations = await translateBatchTitlesWithGoogle(titles, 'en');
+      const translations = await translateBatchTitlesWithGoogle(titles, 'en', (done, total) => {
+        if (done === total || done % 10 === 0) {
+          onShowToast(`翻译进度 ${done}/${total}`, 'info');
+        }
+      });
       const translationMap = new Map<string, string>();
       titles.forEach((t, i) => {
         if (translations[i]) translationMap.set(t, translations[i]);
