@@ -62,7 +62,10 @@ function writeTemplateLocally(buffer: Buffer, meta: TemplateMeta) {
   fs.writeFileSync(TEMPLATE_META, JSON.stringify(meta, null, 2));
 }
 
-const githubConfigured = () => Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO);
+// 仓库是公开的，所以读取备份不需要令牌；只有写入（上传新模板）才需要 GITHUB_TOKEN
+const GITHUB_REPO_DEFAULT = 'abcd7463662-rgb/mens-short-sleeve';
+const githubRepo = () => process.env.GITHUB_REPO || GITHUB_REPO_DEFAULT;
+const githubCanWrite = () => Boolean(process.env.GITHUB_TOKEN);
 
 function githubHeaders(token: string) {
   return {
@@ -77,11 +80,14 @@ function githubHeaders(token: string) {
 async function readGithubFile(
   filePath: string
 ): Promise<{ sha: string; buffer: Buffer } | null> {
-  const token = process.env.GITHUB_TOKEN as string;
-  const repo = process.env.GITHUB_REPO as string;
-  const url = `https://api.github.com/repos/${repo}/contents/${filePath}?ref=${STORE_BRANCH}`;
+  const url = `https://api.github.com/repos/${githubRepo()}/contents/${filePath}?ref=${STORE_BRANCH}`;
+  const token = process.env.GITHUB_TOKEN;
 
-  const res = await fetch(url, { headers: githubHeaders(token) });
+  const res = await fetch(url, {
+    headers: token
+      ? githubHeaders(token)
+      : { Accept: 'application/vnd.github+json', 'User-Agent': 'mens-short-sleeve-app' },
+  });
   if (!res.ok) return null;
 
   const data: any = await res.json();
@@ -92,7 +98,7 @@ async function readGithubFile(
 /** 确保 template-store 分支存在（从 main 的最新提交拉出来，不触发重新部署） */
 async function ensureStoreBranch(): Promise<boolean> {
   const token = process.env.GITHUB_TOKEN as string;
-  const repo = process.env.GITHUB_REPO as string;
+  const repo = githubRepo();
   const headers = githubHeaders(token);
 
   const branchRes = await fetch(
@@ -124,7 +130,7 @@ async function writeGithubFile(
   message: string
 ): Promise<void> {
   const token = process.env.GITHUB_TOKEN as string;
-  const repo = process.env.GITHUB_REPO as string;
+  const repo = githubRepo();
   const headers = githubHeaders(token);
   const url = `https://api.github.com/repos/${repo}/contents/${filePath}`;
 
@@ -148,10 +154,10 @@ async function writeGithubFile(
 
 /**
  * 把模板提交到 template-store 分支，做到跨重新部署、跨设备长期保存。
- * 未配置 GITHUB_TOKEN / GITHUB_REPO 时返回 false，只保留磁盘副本。
+ * 未配置 GITHUB_TOKEN 时返回 false，只保留磁盘副本。
  */
 async function backupTemplateToGitHub(base64: string, meta: TemplateMeta): Promise<boolean> {
-  if (!githubConfigured()) return false;
+  if (!githubCanWrite()) return false;
 
   try {
     if (!(await ensureStoreBranch())) {
@@ -181,7 +187,6 @@ async function backupTemplateToGitHub(base64: string, meta: TemplateMeta): Promi
  * 返回是否恢复了文件。
  */
 async function restoreTemplateFromGitHub(): Promise<boolean> {
-  if (!githubConfigured()) return false;
   if (fs.existsSync(TEMPLATE_FILE)) return true;
 
   try {
@@ -218,7 +223,6 @@ const RESTORE_RETRY_MS = 60_000;
 
 async function restoreTemplateOnce(): Promise<boolean> {
   if (fs.existsSync(TEMPLATE_FILE)) return true;
-  if (!githubConfigured()) return false;
   if (Date.now() - lastRestoreFailureAt < RESTORE_RETRY_MS) return false;
 
   if (!restorePromise) {
@@ -409,7 +413,7 @@ async function startServer() {
       name: meta?.name || 'saved-template.xlsx',
       savedAt: meta?.savedAt || fs.statSync(TEMPLATE_FILE).mtime.toISOString(),
       size: fs.statSync(TEMPLATE_FILE).size,
-      backupToGitHub: githubConfigured(),
+      backupToGitHub: githubCanWrite(),
     });
   });
 
@@ -462,7 +466,7 @@ async function startServer() {
         savedAt: meta.savedAt,
         size: meta.size,
         backedUp,
-        backupConfigured: githubConfigured(),
+        backupConfigured: githubCanWrite(),
       });
     } catch (err: any) {
       console.error('Error in POST /api/template:', err);
@@ -476,9 +480,9 @@ async function startServer() {
       if (fs.existsSync(TEMPLATE_META)) fs.unlinkSync(TEMPLATE_META);
 
       // 同步删掉 GitHub 备份，否则下一次读取又会恢复回来
-      if (githubConfigured()) {
+      if (githubCanWrite()) {
         const token = process.env.GITHUB_TOKEN as string;
-        const repo = process.env.GITHUB_REPO as string;
+        const repo = githubRepo();
         for (const filePath of ['template_storage/template.xlsx', 'template_storage/meta.json']) {
           const existing = await readGithubFile(filePath);
           if (!existing) continue;

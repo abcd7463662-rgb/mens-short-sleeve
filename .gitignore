@@ -10,3 +10,9 @@ coverage/
 # Uploaded listing template: this directory is intentionally committed so the
 # template survives Render redeploys (runtime disk is ephemeral).
 hosted_images_storage/
+
+# The uploaded template's durable copy lives on the template-store branch, not
+# here. Keep the runtime copy out of git so a local test upload can't overwrite
+# the real template on deploy.
+template_storage/*
+!template_storage/.gitkeep
