@@ -47,7 +47,14 @@ import {
 } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
-import { saveTemplateFile, loadTemplateFile, clearTemplateFile } from '../../utils/templateStorage';
+import {
+  saveTemplateFile,
+  loadTemplateFile,
+  clearTemplateFile,
+  uploadTemplateToServer,
+  downloadTemplateFromServer,
+  deleteServerTemplate,
+} from '../../utils/templateStorage';
 
 export interface ProductItem {
   id: string;
@@ -326,14 +333,28 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const handleTemplateUpload = async (file: File) => {
     setTemplateFile(file);
     setTemplateSavedAt(Date.now());
-    onShowToast(`已成功载入自定义上架底表: ${file.name}（已保存到本机，下次自动载入）`, 'success');
+    onShowToast(`正在保存上架底表「${file.name}」...`, 'info');
 
+    // 本地副本先落盘，保证服务器不可达时也能接着用
     try {
       await saveTemplateFile(file);
     } catch (err) {
       console.warn('保存模板到本机失败:', err);
-      setTemplateSavedAt(null);
-      onShowToast('底表已载入，但未能保存到本机（浏览器存储不可用），下次需重新上传', 'error');
+    }
+
+    const serverResult = await uploadTemplateToServer(file);
+    if (serverResult) {
+      onShowToast(
+        serverResult.backedUp
+          ? `底表「${file.name}」已永久保存（服务器 + GitHub 备份），以后无需再次上传`
+          : `底表「${file.name}」已保存到服务器，以后打开自动载入`,
+        'success'
+      );
+    } else {
+      onShowToast(
+        `底表「${file.name}」已保存在本机，但未能同步到服务器（网络问题），下次打开仍可使用`,
+        'error'
+      );
     }
   };
 
@@ -341,21 +362,42 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     setTemplateFile(null);
     setTemplateSavedAt(null);
     await clearTemplateFile();
-    onShowToast('已重置为系统内置标准模板，本机保存的底表也已清除', 'info');
+    await deleteServerTemplate();
+    onShowToast('已重置为系统内置标准模板，本机与服务器保存的底表均已清除', 'info');
   };
 
   // 页面打开时恢复上次保存的底表
   useEffect(() => {
     let cancelled = false;
-    loadTemplateFile().then((saved) => {
-      if (cancelled || !saved) return;
-      setTemplateFile((prev) => prev ?? saved.file);
-      setTemplateSavedAt((prev) => prev ?? saved.savedAt);
-    });
+
+    (async () => {
+      // 优先用服务器上的版本，这样换浏览器/换电脑也能自动拿到
+      const fromServer = await downloadTemplateFromServer();
+      if (cancelled) return;
+      if (fromServer) {
+        setTemplateFile((prev) => prev ?? fromServer);
+        setTemplateSavedAt((prev) => prev ?? Date.now());
+        // 顺手刷新本地副本，保证和服务端一致
+        saveTemplateFile(fromServer).catch(() => undefined);
+        return;
+      }
+
+      const local = await loadTemplateFile();
+      if (cancelled || !local) return;
+      setTemplateFile((prev) => prev ?? local.file);
+      setTemplateSavedAt((prev) => prev ?? local.savedAt);
+
+      // 服务端没有（例如刚重新部署过），用本地副本自动补回去
+      const healed = await uploadTemplateToServer(local.file);
+      if (!cancelled && healed) {
+        onShowToast('已从本机备份自动恢复上架底表到服务器', 'success');
+      }
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [onShowToast]);
 
   // 保存图片链接修改
   const handleSaveUrlEdit = () => {

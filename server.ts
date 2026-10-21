@@ -24,6 +24,88 @@ function rememberTranslation(key: string, value: string) {
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
+ * 上架目标模板的持久化存储。
+ *
+ * 磁盘目录 template_storage 同时是仓库里的一个目录，所以提交进去的模板在每次
+ * 重新部署后依然存在（Render 的运行时文件系统是临时的）。若配置了
+ * GITHUB_TOKEN，上传的新模板会自动提交回仓库，做到长期保存。
+ */
+const TEMPLATE_DIR = path.join(process.cwd(), 'template_storage');
+const TEMPLATE_FILE = path.join(TEMPLATE_DIR, 'template.xlsx');
+const TEMPLATE_META = path.join(TEMPLATE_DIR, 'meta.json');
+
+interface TemplateMeta {
+  name: string;
+  savedAt: string;
+  size: number;
+}
+
+function ensureTemplateDir() {
+  if (!fs.existsSync(TEMPLATE_DIR)) {
+    fs.mkdirSync(TEMPLATE_DIR, { recursive: true });
+  }
+}
+
+function readTemplateMeta(): TemplateMeta | null {
+  try {
+    if (!fs.existsSync(TEMPLATE_META)) return null;
+    return JSON.parse(fs.readFileSync(TEMPLATE_META, 'utf8')) as TemplateMeta;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把模板提交回 GitHub 仓库，让它在重新部署后仍然存在。
+ * 未配置 GITHUB_TOKEN / GITHUB_REPO 时静默跳过，只保留磁盘副本。
+ */
+async function backupTemplateToGitHub(base64: string, meta: TemplateMeta): Promise<boolean> {
+  const token = process.env.GITHUB_TOKEN;
+  const repo = process.env.GITHUB_REPO;
+  if (!token || !repo) return false;
+
+  const put = async (filePath: string, contentBase64: string, message: string) => {
+    const url = `https://api.github.com/repos/${repo}/contents/${filePath}`;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/vnd.github+json',
+      'User-Agent': 'mens-short-sleeve-app',
+      'Content-Type': 'application/json',
+    };
+
+    let sha: string | undefined;
+    const existing = await fetch(url, { headers });
+    if (existing.ok) {
+      const data: any = await existing.json();
+      sha = data?.sha;
+    }
+
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ message, content: contentBase64, sha, branch: 'main' }),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(`GitHub 提交失败 (${response.status}): ${detail.slice(0, 200)}`);
+    }
+  };
+
+  try {
+    await put('template_storage/template.xlsx', base64, `chore: update upload template (${meta.name})`);
+    await put(
+      'template_storage/meta.json',
+      Buffer.from(JSON.stringify(meta, null, 2), 'utf8').toString('base64'),
+      `chore: update template metadata (${meta.name})`
+    );
+    return true;
+  } catch (err: any) {
+    console.error('[Template backup] GitHub 提交失败:', err?.message || err);
+    return false;
+  }
+}
+
+/**
  * Google's public endpoints answer HTTP 429 as soon as a handful of requests
  * overlap, and the failure is silent (it just returns the source text). Keep the
  * whole server at two in-flight calls and queue the rest.
@@ -177,6 +259,91 @@ async function startServer() {
       status: 'ok',
       hasMaiziKey: Boolean(process.env.MAIZI_API_KEY || process.env.MAIZITECH_API_KEY),
     });
+  });
+
+  // --- 上架目标模板：服务端持久化 ---
+  ensureTemplateDir();
+
+  app.get('/api/template', (req, res) => {
+    if (!fs.existsSync(TEMPLATE_FILE)) {
+      res.json({ exists: false });
+      return;
+    }
+    const meta = readTemplateMeta();
+    res.json({
+      exists: true,
+      name: meta?.name || 'saved-template.xlsx',
+      savedAt: meta?.savedAt || fs.statSync(TEMPLATE_FILE).mtime.toISOString(),
+      size: fs.statSync(TEMPLATE_FILE).size,
+      backupToGitHub: Boolean(process.env.GITHUB_TOKEN && process.env.GITHUB_REPO),
+    });
+  });
+
+  app.get('/api/template/file', (req, res) => {
+    if (!fs.existsSync(TEMPLATE_FILE)) {
+      res.status(404).json({ error: '尚未保存上架模板' });
+      return;
+    }
+    const meta = readTemplateMeta();
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${encodeURIComponent(meta?.name || 'template.xlsx')}"`
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(TEMPLATE_FILE).pipe(res);
+  });
+
+  app.post('/api/template', async (req, res) => {
+    try {
+      const { fileBase64, filename } = req.body;
+      if (!fileBase64 || typeof fileBase64 !== 'string') {
+        res.status(400).json({ error: '缺少模板文件数据' });
+        return;
+      }
+
+      const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (buffer.length === 0) {
+        res.status(400).json({ error: '模板文件为空' });
+        return;
+      }
+
+      ensureTemplateDir();
+      fs.writeFileSync(TEMPLATE_FILE, buffer);
+
+      const meta: TemplateMeta = {
+        name: filename || 'template.xlsx',
+        savedAt: new Date().toISOString(),
+        size: buffer.length,
+      };
+      fs.writeFileSync(TEMPLATE_META, JSON.stringify(meta, null, 2));
+
+      const backedUp = await backupTemplateToGitHub(buffer.toString('base64'), meta);
+
+      res.json({
+        success: true,
+        name: meta.name,
+        savedAt: meta.savedAt,
+        size: meta.size,
+        backedUp,
+      });
+    } catch (err: any) {
+      console.error('Error in POST /api/template:', err);
+      res.status(500).json({ error: err.message || '保存模板失败' });
+    }
+  });
+
+  app.delete('/api/template', async (req, res) => {
+    try {
+      if (fs.existsSync(TEMPLATE_FILE)) fs.unlinkSync(TEMPLATE_FILE);
+      if (fs.existsSync(TEMPLATE_META)) fs.unlinkSync(TEMPLATE_META);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '清除模板失败' });
+    }
   });
 
   // Diagnostics for the Google Translate upstream: run this when titles stop
