@@ -257,6 +257,17 @@ export function buildMultiProductTemplateRules(
     const firstColor = colors[0] || 'black';
     const firstColorName = COLOR_NAMES[firstColor] || '黑色';
     const firstImageUrl = getImageUrl(firstColor);
+    const whiteExtraImages = [
+      'https://img.kwcdn.com/product/open/7c8fd3b010b249b6ad9bd9f5e4cd93df-goods.jpeg?imageView2/2/w/800/q/70/format/avif',
+      'https://img.kwcdn.com/product/open/3483dde9f0ab430f86ed29b47e116a41-goods.jpeg?imageView2/2/w/800/q/70/format/avif',
+      'https://img.kwcdn.com/product/open/19e5dc66ae634612a8a3c92022476e92-goods.jpeg?imageView2/2/w/800/q/70/format/avif',
+    ];
+    const blackExtraImages = [
+      'https://img.kwcdn.com/product/open/e297987d009742399e77e6fee09197f0-goods.jpeg',
+      'https://img.kwcdn.com/product/open/b2ff0cd7a9254b0b926a075e84fb9d12-goods.jpeg',
+      'https://img.kwcdn.com/product/open/da5675724f5f457087d2a15349f82681-goods.jpeg',
+    ];
+    const firstExtraImages = firstColor === 'white' ? whiteExtraImages : blackExtraImages;
 
     // 1. SPU 行（B 列改为每个 SPU 独立的 017 编码，替换默认年份值）
     TEMPLATE_ROW6_RULES.forEach((r) => {
@@ -309,19 +320,19 @@ export function buildMultiProductTemplateRules(
     allRules.push({
       cell: `FW${spuRow}`,
       column: 'FW',
-      value: 'https://img.kwcdn.com/product/open/e297987d009742399e77e6fee09197f0-goods.jpeg',
+      value: firstExtraImages[0],
       category: `商品${k + 1}图片(FW列)`,
     });
     allRules.push({
       cell: `FX${spuRow}`,
       column: 'FX',
-      value: 'https://img.kwcdn.com/product/open/b2ff0cd7a9254b0b926a075e84fb9d12-goods.jpeg',
+      value: firstExtraImages[1],
       category: `商品${k + 1}图片(FX列)`,
     });
     allRules.push({
       cell: `FY${spuRow}`,
       column: 'FY',
-      value: 'https://img.kwcdn.com/product/open/da5675724f5f457087d2a15349f82681-goods.jpeg',
+      value: firstExtraImages[2],
       category: `商品${k + 1}图片(FY列)`,
     });
 
@@ -330,6 +341,7 @@ export function buildMultiProductTemplateRules(
     colors.forEach((cKey) => {
       const colorName = COLOR_NAMES[cKey] || '标准色';
       const imageUrl = getImageUrl(cKey);
+      const extraImages = cKey === 'white' ? whiteExtraImages : blackExtraImages;
 
       for (let s = 0; s < 5; s++) {
         const row = skuCurrentRow + s;
@@ -407,19 +419,19 @@ export function buildMultiProductTemplateRules(
         allRules.push({
           cell: `FW${row}`,
           column: 'FW',
-          value: 'https://img.kwcdn.com/product/open/e297987d009742399e77e6fee09197f0-goods.jpeg',
+          value: extraImages[0],
           category: `商品${k + 1}图片(FW列)`,
         });
         allRules.push({
           cell: `FX${row}`,
           column: 'FX',
-          value: 'https://img.kwcdn.com/product/open/b2ff0cd7a9254b0b926a075e84fb9d12-goods.jpeg',
+          value: extraImages[1],
           category: `商品${k + 1}图片(FX列)`,
         });
         allRules.push({
           cell: `FY${row}`,
           column: 'FY',
-          value: 'https://img.kwcdn.com/product/open/da5675724f5f457087d2a15349f82681-goods.jpeg',
+          value: extraImages[2],
           category: `商品${k + 1}图片(FY列)`,
         });
       }

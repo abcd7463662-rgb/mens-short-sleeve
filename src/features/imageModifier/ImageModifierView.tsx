@@ -104,6 +104,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
   const [isExportingOriginal, setIsExportingOriginal] = useState<boolean>(false);
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
+  const [translationProgress, setTranslationProgress] = useState<{
+    done: number;
+    total: number;
+    failed: number;
+  } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitleText, setEditTitleText] = useState<string>('');
@@ -282,16 +287,19 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 批量异步进行谷歌翻译
   const autoTranslateTitles = async (currentItems: ProductItem[]) => {
     const needsTranslation = currentItems.filter((it) => !it.englishTitle || it.englishTitle === it.title);
-    if (needsTranslation.length === 0) return;
+    if (needsTranslation.length === 0) {
+      setTranslationProgress({ done: 0, total: 0, failed: 0 });
+      return;
+    }
 
     setIsTranslatingAll(true);
+    const uniqueTitleCount = new Set(needsTranslation.map((it) => cleanChineseTitle(it.title))).size;
+    setTranslationProgress({ done: 0, total: uniqueTitleCount, failed: 0 });
     onShowToast(`正在翻译 ${needsTranslation.length} 条商品标题，请稍候...`, 'info');
     try {
       const titles = needsTranslation.map((it) => it.title);
       const translations = await translateBatchTitlesWithGoogle(titles, 'en', (done, total) => {
-        if (done === total || done % 10 === 0) {
-          onShowToast(`翻译进度 ${done}/${total}`, 'info');
-        }
+        setTranslationProgress((prev) => ({ done, total, failed: prev?.failed || 0 }));
       });
       const translationMap = new Map<string, string>();
       titles.forEach((t, i) => {
@@ -311,8 +319,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         })
       );
 
-      const doneCount = translationMap.size;
+      const doneCount = needsTranslation.filter((it) => translationMap.has(it.title)).length;
       const missingCount = needsTranslation.length - doneCount;
+      setTranslationProgress({ done: needsTranslation.length, total: needsTranslation.length, failed: missingCount });
       if (missingCount > 0) {
         onShowToast(
           `已翻译 ${doneCount} 条，仍有 ${missingCount} 条未成功（谷歌接口限流）。点击右下角「重新翻译」可重试。`,
@@ -323,6 +332,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       }
     } catch (err) {
       console.warn('Batch translation warning:', err);
+      setTranslationProgress({ done: 0, total: needsTranslation.length, failed: needsTranslation.length });
       onShowToast('批量翻译失败，可点击「重新翻译」重试', 'error');
     } finally {
       setIsTranslatingAll(false);
@@ -872,6 +882,46 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
             </div>
+            {products.length > 0 && (
+              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5" role="status" aria-live="polite">
+                <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
+                  <span className="flex items-center gap-1.5 font-semibold text-slate-800">
+                    {isTranslatingAll && <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-600" />}
+                    {isTranslatingAll ? '标题翻译进行中' : translationProgress?.failed
+                      ? '标题翻译未全部完成'
+                      : '标题翻译状态'}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-slate-700">
+                    {isTranslatingAll
+                      ? `${translationProgress?.done || 0} / ${translationProgress?.total || 0} 条标题`
+                      : translationProgress?.failed
+                        ? `已就绪 ${translatedCount} / ${products.length} 款`
+                        : `已就绪 ${translatedCount} / ${products.length} 款`}
+                  </span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-label="标题翻译进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={
+                  isTranslatingAll && translationProgress?.total
+                    ? Math.round((translationProgress.done / translationProgress.total) * 100)
+                    : 100
+                }>
+                  <div
+                    className={`h-full rounded-full transition-all duration-300 ${translationProgress?.failed ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                    style={{
+                      width: `${isTranslatingAll && translationProgress?.total
+                        ? Math.round((translationProgress.done / translationProgress.total) * 100)
+                        : 100}%`,
+                    }}
+                  />
+                </div>
+                <p className={`mt-1.5 text-[11px] ${translationProgress?.failed ? 'text-amber-800' : 'text-slate-600'}`}>
+                  {isTranslatingAll
+                    ? '正在逐条翻译，完成后会自动更新英文标题。'
+                    : translationProgress?.failed
+                      ? `还有 ${translationProgress.failed} 款标题未翻译成功，可点击“重新翻译”重试。`
+                      : '未翻译标题会自动翻译，结果写入上架模板 D 列。'}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* 模块 2：上架模板配置 */}
