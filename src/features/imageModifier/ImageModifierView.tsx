@@ -19,7 +19,6 @@ import {
   Link2,
   Image as ImageIcon,
   ArrowRight,
-  Shirt,
   Sparkles,
   ChevronLeft,
   ChevronRight,
@@ -673,7 +672,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   }, [products, colorFilter]);
 
   return (
-    <div className="w-full max-w-6xl mx-auto py-8 px-4 sm:px-6">
+    <div className="w-full max-w-7xl mx-auto py-5 px-4 sm:px-6">
       {/* Hidden File Inputs */}
       <input
         ref={tableInputRef}
@@ -697,73 +696,31 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       />
 
       {/* 主界面空间 */}
-      <div className="space-y-6">
-        {/* 顶部核心功能卡片：衣服黑白颜色人工判定与回填中心 */}
-        <div className="bg-gradient-to-r from-slate-950 via-zinc-900 to-neutral-950 text-white rounded-2xl p-5 sm:p-6 shadow-xl border border-zinc-700/80 text-left space-y-4">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="space-y-1.5 max-w-2xl">
-              <div className="flex flex-wrap items-center gap-2">
-                <div className="w-8 h-8 rounded-xl bg-white/10 text-white flex items-center justify-center font-bold text-sm shrink-0 border border-white/20">
-                  <Shirt className="w-4 h-4 text-emerald-400" />
-                </div>
-                <h1 className="text-lg font-bold tracking-tight text-white flex items-center gap-2">
-                  衣服黑白颜色人工判定与回填中心
-                </h1>
-                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
-                  默认填入：黑色衣服
-                </span>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                表格中的图片为<strong>黑色或白色衣服</strong>。在此处<strong>人工确认选择</strong>每件衣服是<strong>黑色</strong>还是<strong>白色</strong>，系统将自动把选好的颜色（“黑色”或“白色”）填入表格中<strong>颜色部分</strong>（标准模板 <strong>EE 列</strong>及原表格<strong>颜色列</strong>），同时将图片直链替换写入 <strong>FV 列</strong>。
-              </p>
-            </div>
-
-            {/* 快捷批量判定与极速看图按钮 */}
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+          <div>
+            <h1 className="text-lg font-semibold text-slate-900">商品上架处理</h1>
+            <p className="mt-0.5 text-xs text-slate-500">导入商品表格，确认颜色后导出上架文件</p>
+          </div>
+          {products.length > 0 && <div className="flex flex-wrap items-center gap-2">
               {products.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setRapidReviewIndex(0)}
-                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700"
                   title="开启全屏看图，使用快捷键 1(黑) / 2(白) 快速连审"
                 >
-                  <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>极速看图判定流 (按键1黑/2白)</span>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>快速判色</span>
                 </button>
               )}
-            </div>
-          </div>
-
-          {/* 状态统计条与批量快捷设置 */}
-          {products.length > 0 && (
-            <div className="pt-3 border-t border-zinc-800 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex flex-wrap items-center gap-2.5 text-slate-300">
-                <span className="font-semibold text-white">
-                  已导入: <strong>{products.length}</strong> 款
-                </span>
-                <span className="text-zinc-600">•</span>
-                <span className="flex items-center gap-1.5 bg-zinc-800/80 px-2.5 py-1 rounded-lg border border-zinc-700">
-                  <span className="w-2.5 h-2.5 rounded-full bg-zinc-950 border border-zinc-400"></span>
-                  <span className="font-medium text-white">
-                    已判定黑色衣服: <strong className="text-emerald-400 font-bold">{blackCount}</strong> 款 (默认)
-                  </span>
-                </span>
-                <span className="text-zinc-600">•</span>
-                <span className="flex items-center gap-1.5 bg-zinc-800/80 px-2.5 py-1 rounded-lg border border-zinc-700">
-                  <span className="w-2.5 h-2.5 rounded-full bg-white border border-slate-300"></span>
-                  <span className="font-medium text-white">
-                    已判定白色衣服: <strong className="text-blue-400 font-bold">{whiteCount}</strong> 款
-                  </span>
-                </span>
-              </div>
-
-              {/* 批量操作按钮 */}
-              <div className="flex items-center gap-1.5 text-xs">
-                <span className="text-slate-400 text-[11px]">快速操作:</span>
+              <details className="relative">
+                <summary className="cursor-pointer list-none rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">批量设置</summary>
+                <div className="absolute right-0 top-full z-20 mt-1 flex min-w-40 flex-col gap-1 rounded-md border border-slate-200 bg-white p-1.5 shadow-lg">
                 <button
                   type="button"
                   onClick={() => handleBatchSetAll('black')}
-                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-medium cursor-pointer"
+                  className="rounded px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
                   title="将全部商品都设为黑色衣服"
                 >
                   全部设为黑色
@@ -771,7 +728,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <button
                   type="button"
                   onClick={() => handleBatchSetAll('white')}
-                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 text-[11px] font-medium cursor-pointer"
+                  className="rounded px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
                   title="将全部商品都设为白色衣服"
                 >
                   全部设为白色
@@ -779,50 +736,43 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <button
                   type="button"
                   onClick={handleSmartDetectFromTitle}
-                  className="px-2.5 py-1 rounded-lg bg-indigo-950 hover:bg-indigo-900 text-indigo-200 border border-indigo-800 text-[11px] font-medium cursor-pointer flex items-center gap-1"
+                  className="flex items-center gap-1.5 rounded px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100"
                   title="按标题文字中的‘白’‘黑’进行初步预判"
                 >
-                  <Sparkles className="w-3 h-3 text-indigo-400" />
+                  <Sparkles className="h-3.5 w-3.5" />
                   <span>标题关键词初判</span>
                 </button>
-              </div>
-            </div>
-          )}
+                </div>
+              </details>
+            </div>}
         </div>
 
         {/* 步骤 1 & 2 并排卡片 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           {/* 模块 1：商品表格上传与直链识别 */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left flex flex-col justify-between">
+          <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm border border-blue-100">
-                    1
-                  </div>
-                  <h2 className="text-base font-bold text-slate-900">商品表格上传</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">商品表格</h2>
                 </div>
                 {tableFile && (
-                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    已识别 {products.length} 款衣服图片
+                  <span className="text-xs text-slate-500">
+                    已识别 {products.length} 款
                   </span>
                 )}
               </div>
 
-              <p className="text-xs text-slate-500 leading-relaxed">
-                上传含衣服图片链接的表格，系统将<strong>直接提取图片直链替换写入</strong>，无需 AI 绘图。随后您可人工点击确认该款衣服为黑色或白色。
-              </p>
-
               {/* 上传操作区 */}
               {tableFile ? (
                 <div className="space-y-2">
-                  <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3">
+                  <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
                     <div className="flex items-center gap-2.5 truncate">
                       <FileSpreadsheet className="w-5 h-5 text-blue-600 shrink-0" />
                       <div className="truncate">
                         <p className="text-xs font-bold text-slate-800 truncate">{tableFile.name}</p>
                         <p className="text-[11px] text-slate-500">
-                          工作表: {tableResult?.activeSheetName} · 共提取 {products.length} 款衣服
+                          {tableResult?.activeSheetName} · {products.length} 款
                         </p>
                       </div>
                     </div>
@@ -853,13 +803,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               ) : (
                 <div
                   onClick={() => tableInputRef.current?.click()}
-                  className="border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl p-6 text-center cursor-pointer bg-slate-50/50 hover:bg-blue-50/40 transition-colors"
+                  className="cursor-pointer rounded-md border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center transition-colors hover:border-blue-500 hover:bg-blue-50/40"
                 >
-                  <Upload className="w-8 h-8 mx-auto text-blue-500 mb-2" />
-                  <p className="text-xs font-bold text-slate-800">点击上传衣服商品表格 (.xlsx, .xls, .csv)</p>
-                  <p className="text-[11px] text-slate-400 mt-1">
-                    系统自动读取商品标题与衣服图片直链，并默认赋予黑色衣服
-                  </p>
+                  <Upload className="mx-auto mb-1.5 h-5 w-5 text-slate-500" />
+                  <p className="text-xs font-medium text-slate-800">选择商品表格</p>
+                  <p className="mt-0.5 text-[11px] text-slate-500">XLSX、XLS 或 CSV</p>
                 </div>
               )}
             </div>
@@ -868,7 +816,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
               <span className="flex items-center gap-1">
                 <Globe className="w-3.5 h-3.5 text-blue-500" />
-                <span>英文标题: 自动调用谷歌翻译（写入模板 D 列）</span>
+                <span>标题翻译</span>
               </span>
               {products.length > 0 && (
                 <button
@@ -883,20 +831,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               )}
             </div>
             {products.length > 0 && (
-              <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5" role="status" aria-live="polite">
-                <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
-                  <span className="flex items-center gap-1.5 font-semibold text-slate-800">
+              <div className="mt-3 space-y-1.5" role="status" aria-live="polite">
+                <div className="flex items-center justify-between gap-3 text-xs">
+                  <span className="flex items-center gap-1.5 font-medium text-slate-700">
                     {isTranslatingAll && <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-600" />}
-                    {isTranslatingAll ? '标题翻译进行中' : translationProgress?.failed
-                      ? '标题翻译未全部完成'
-                      : '标题翻译状态'}
+                    {isTranslatingAll ? '标题翻译中' : translationProgress?.failed ? '部分标题未翻译' : '标题翻译'}
                   </span>
                   <span className="shrink-0 tabular-nums text-slate-700">
                     {isTranslatingAll
-                      ? `${translationProgress?.done || 0} / ${translationProgress?.total || 0} 条标题`
-                      : translationProgress?.failed
-                        ? `已就绪 ${translatedCount} / ${products.length} 款`
-                        : `已就绪 ${translatedCount} / ${products.length} 款`}
+                      ? `${translationProgress?.done || 0} / ${translationProgress?.total || 0}`
+                      : `${translatedCount} / ${products.length}`}
                   </span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200" role="progressbar" aria-label="标题翻译进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={
@@ -913,35 +857,24 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     }}
                   />
                 </div>
-                <p className={`mt-1.5 text-[11px] ${translationProgress?.failed ? 'text-amber-800' : 'text-slate-600'}`}>
-                  {isTranslatingAll
-                    ? '正在逐条翻译，完成后会自动更新英文标题。'
-                    : translationProgress?.failed
-                      ? `还有 ${translationProgress.failed} 款标题未翻译成功，可点击“重新翻译”重试。`
-                      : '未翻译标题会自动翻译，结果写入上架模板 D 列。'}
-                </p>
+                {translationProgress?.failed ? (
+                  <p className="text-[11px] text-amber-800">{translationProgress.failed} 款失败，可点“重新翻译”重试</p>
+                ) : null}
               </div>
             )}
           </div>
 
           {/* 模块 2：上架模板配置 */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left flex flex-col justify-between">
+          <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-sm border border-purple-100">
-                    2
-                  </div>
-                  <h2 className="text-base font-bold text-slate-900">上架目标模板</h2>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                   {templateFile ? '自定义底表' : '系统内置标准模板'}
                 </span>
               </div>
-
-              <p className="text-xs text-slate-500 leading-relaxed">
-                数据将写入<strong>第 2 个工作表</strong>：C列填中文标题、D列填谷歌翻译、<strong>EE列填入您选好的“黑色”或“白色”</strong>、<strong>FV列替换为衣服图片直链</strong>。
-              </p>
 
               {/* 模板操作区 */}
               {templateFile ? (
@@ -952,13 +885,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                       <p className="text-xs font-bold text-slate-800 truncate">{templateFile.name}</p>
                       <p className="text-[11px] text-slate-500">
                         {templateSavedAt
-                          ? `已保存在本机，${new Date(templateSavedAt).toLocaleString('zh-CN', {
+                          ? `系统已保存 · ${new Date(templateSavedAt).toLocaleString('zh-CN', {
                               month: '2-digit',
                               day: '2-digit',
                               hour: '2-digit',
                               minute: '2-digit',
                             })} 保存`
-                          : '已载入自定义上架底表（未保存到本机）'}
+                          : '已载入系统底表'}
                       </p>
                     </div>
                   </div>
@@ -985,16 +918,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <div className="flex items-center gap-2.5 truncate">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                     <div>
-                      <p className="text-xs font-bold text-slate-800">使用系统内置标准多工作表模板</p>
-                      <p className="text-[11px] text-slate-500">
-                        1 款衣服 = 1 行 SPU + 5 行 SKU (欧美S/M/L/XL/XXL)
-                      </p>
+                      <p className="text-xs font-medium text-slate-800">使用系统标准模板</p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => templateInputRef.current?.click()}
-                    className="px-3 py-1.5 rounded-lg border border-purple-300 bg-white hover:bg-purple-50 text-purple-700 text-xs font-semibold cursor-pointer shrink-0"
+                    className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                   >
                     上传自定义底表
                   </button>
@@ -1002,15 +932,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               )}
             </div>
 
-            <div className="pt-3 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-              <span className="flex items-center gap-1">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                <span>自动写入第 2 个工作表（目标 sheet）</span>
-              </span>
-              <span className="font-medium text-slate-700">
-                每款衣服: 1行SPU + 5行对应黑/白颜色SKU
-              </span>
-            </div>
           </div>
         </div>
 
@@ -1113,78 +1034,40 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         )}
 
         {/* 模块 3：人工判定衣服黑白颜色与多方式导出 */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm border border-emerald-100">
-                3
-              </div>
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-900">衣服黑白人工选择与表格导出</h2>
-                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                    直接读取图片直链替换
-                  </span>
-                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1">
-                    <Globe className="w-3 h-3 text-blue-600" />
-                    谷歌翻译接入 (D 列)
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  请人工核对图片判定衣服颜色，点击切换<strong>黑色</strong>或<strong>白色</strong>，判定好的结果将即时填入表格<strong>颜色部分（EE 列及原表颜色列）</strong>。
-                </p>
-              </div>
+        <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 text-left">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+            <div className="flex items-baseline gap-2">
+              <h2 className="text-sm font-semibold text-slate-900">商品</h2>
+              {products.length > 0 && <span className="text-xs text-slate-500">{filteredProducts.length} / {products.length}</span>}
             </div>
-
-            {/* 导出控制区 */}
-            <div className="flex flex-wrap items-center gap-2.5">
-              {/* 导出直接回填的原表格 */}
-              <button
-                type="button"
-                onClick={handleExportBackToOriginalTable}
-                disabled={products.length === 0 || isExportingOriginal}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-bold border border-slate-300 bg-white hover:bg-slate-50 text-slate-800 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-colors shadow-2xs"
-                title="将人为判定好的黑色/白色写回原表格的颜色列并下载"
-              >
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-                <span>
-                  {isExportingOriginal ? '正在回填导出...' : '回填原表格导出 (.xlsx)'}
-                </span>
-              </button>
-
-              {/* 导出颜色与直链对照表 */}
-              <button
-                type="button"
-                onClick={handleExportMappingExcel}
-                disabled={products.length === 0}
-                className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-xl text-xs font-semibold border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                title="导出黑白颜色与图片链接对照清单"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>导出对照清单</span>
-              </button>
-
+            <div className="flex flex-wrap items-center gap-2">
               {/* 一键导出整合上架模板 */}
               <button
                 type="button"
                 onClick={handleExportCombined}
                 disabled={products.length === 0 || isBatchExporting}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-bold shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition-all active:scale-95"
+                className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
               >
-                <Download className={`w-4 h-4 ${isBatchExporting ? 'animate-bounce' : ''}`} />
-                <span>
-                  {isBatchExporting
-                    ? '正在生成整合模板...'
-                    : `一键导出标准上架模板 (${products.length} 款 · EE填黑白)`}
-                </span>
+                <Download className={`h-3.5 w-3.5 ${isBatchExporting ? 'animate-bounce' : ''}`} />
+                <span>{isBatchExporting ? '正在生成...' : '导出上架模板'}</span>
               </button>
+              <details className="relative">
+                <summary className="cursor-pointer list-none rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">其他导出</summary>
+                <div className="absolute right-0 top-full z-20 mt-1 flex min-w-48 flex-col gap-1 rounded-md border border-slate-200 bg-white p-1.5 shadow-lg">
+                  <button type="button" onClick={handleExportBackToOriginalTable} disabled={products.length === 0 || isExportingOriginal} className="rounded px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-40">
+                    {isExportingOriginal ? '正在回填导出...' : '回填原表格并下载'}
+                  </button>
+                  <button type="button" onClick={handleExportMappingExcel} disabled={products.length === 0} className="rounded px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-100 disabled:opacity-40">
+                    导出颜色与图片对照表
+                  </button>
+                </div>
+              </details>
             </div>
           </div>
 
           {/* 实时状态统计、筛选与视图切换 */}
           {products.length > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 p-3 rounded-xl border border-slate-100">
+              <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {/* 颜色筛选器 */}
                 <div className="flex items-center gap-1 bg-white p-0.5 border border-slate-200 rounded-lg">
@@ -1221,7 +1104,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
                 <span className="text-slate-300 hidden sm:inline">•</span>
                 <span className="text-slate-500 text-xs hidden sm:inline">
-                  英文翻译已就绪: <strong className="text-purple-600">{translatedCount}</strong>/{products.length}
+                  标题已翻译: <strong className="text-slate-800">{translatedCount}</strong>/{products.length}
                 </span>
               </div>
 
@@ -1236,7 +1119,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  画廊大图
+                  图片
                 </button>
                 <button
                   type="button"
@@ -1247,7 +1130,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  表格列表
+                  列表
                 </button>
               </div>
             </div>
@@ -1257,7 +1140,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           {products.length > 0 ? (
             viewLayout === 'card' ? (
               /* 画廊大图看图模式：突出展示衣服图片，并提供极为醒目的黑白二选一按钮 */
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                 {filteredProducts.map((item, idx) => {
                   const isEditing = editingId === item.id;
                   const isBlack = item.selectedColor === 'black';
@@ -1271,21 +1154,17 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   return (
                     <div
                       key={item.id}
-                      className={`bg-white rounded-2xl p-4 shadow-sm transition-all border text-left flex flex-col justify-between gap-3 ${
+                      className={`flex flex-col justify-between gap-2.5 rounded-lg border bg-white p-3 text-left ${
                         isBlack
-                          ? 'border-zinc-800/60 ring-1 ring-zinc-800/10'
-                          : 'border-blue-300 ring-1 ring-blue-300/30'
+                          ? 'border-slate-300'
+                          : 'border-sky-300'
                       }`}
                     >
                       {/* 卡片头部：序号、标题与行号 */}
-                      <div className="space-y-1.5 border-b border-slate-100 pb-2.5">
+                      <div className="min-w-0 space-y-1 border-b border-slate-100 pb-2">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded shrink-0">
-                            #{originalIndex + 1}
-                          </span>
-                          <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded font-medium shrink-0">
-                            {rowRangeLabel}
-                          </span>
+                          <span className="text-[11px] font-medium text-slate-400">#{originalIndex + 1}</span>
+                          <span className="text-[10px] text-slate-400">{rowRangeLabel}</span>
                         </div>
 
                         {/* 标题可编辑 */}
@@ -1343,7 +1222,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                       <div className="relative">
                         <div
                           onClick={() => openImagePreview(item)}
-                          className="w-full aspect-[3/4] rounded-xl bg-slate-100 border border-slate-200 overflow-hidden relative group cursor-pointer shadow-2xs hover:border-blue-400 transition-colors flex items-center justify-center"
+                          className="w-full aspect-[3/4] overflow-hidden rounded-md bg-slate-100 relative group cursor-pointer flex items-center justify-center"
                         >
                           {item.imageUrl ? (
                             <>
@@ -1365,138 +1244,68 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                             </div>
                           )}
 
-                          {/* 当前已选颜色徽章 */}
-                          <div className="absolute top-2 left-2 shadow-md">
-                            {isBlack ? (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-zinc-950 text-white border border-zinc-700 flex items-center gap-1">
-                                <span className="w-2 h-2 rounded-full bg-zinc-950 border border-zinc-400"></span>
-                                <span>判定: 黑色衣服</span>
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-blue-800 border border-blue-300 flex items-center gap-1 shadow-xs">
-                                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                                <span>判定: 白色衣服</span>
-                              </span>
-                            )}
-                          </div>
                         </div>
 
                         {/* 修改链接工具按钮 */}
-                        <div className="flex items-center justify-between text-[10px] mt-1 px-1">
+                        <div className="mt-1 flex items-center justify-end px-1">
                           <button
                             type="button"
                             onClick={() => setEditingUrlItem({ id: item.id, url: item.imageUrl || '' })}
-                            className="text-slate-400 hover:text-blue-600 font-mono flex items-center gap-1 cursor-pointer"
+                            className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-blue-700"
                           >
-                            <Edit2 className="w-2.5 h-2.5" />
-                            <span>修改直链</span>
+                            <Edit2 className="h-3 w-3" />
+                            <span>修改图片链接</span>
                           </button>
-                          {item.imageUrl && (
-                            <button
-                              type="button"
-                              onClick={() => downloadImageAs1340x1785(item.imageUrl, `${item.title}_${item.selectedColor === 'black' ? '黑色' : '白色'}.jpg`)}
-                              className="text-slate-400 hover:text-slate-800 flex items-center gap-0.5 cursor-pointer"
-                              title="下载标准化尺寸图片"
-                            >
-                              <Download className="w-3 h-3" />
-                              <span>下载原图</span>
-                            </button>
-                          )}
                         </div>
                       </div>
 
-                      {/* 核心！人工选择衣服是黑色或是白色（超清晰大按钮） */}
-                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200/90 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-bold text-slate-800 flex items-center gap-1">
-                            <Shirt className="w-3.5 h-3.5 text-slate-600" />
-                            <span>人为选择衣服是黑色或白色:</span>
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          {/* 黑色按钮 */}
+                      <div className="flex items-center gap-1 rounded-md bg-slate-100 p-1" aria-label="选择衣服颜色">
                           <button
                             type="button"
                             onClick={() => handleSetItemColor(item.id, 'black')}
-                            className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 border ${
-                              isBlack
-                                ? 'bg-zinc-950 text-white border-zinc-900 shadow-md ring-2 ring-emerald-400'
-                                : 'bg-white hover:bg-zinc-100 text-zinc-700 border-slate-300'
+                            aria-pressed={isBlack}
+                            className={`flex-1 rounded px-2 py-2 text-xs font-semibold transition-colors ${
+                              isBlack ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-white'
                             }`}
                           >
-                            <div className="flex items-center gap-1.5">
-                              <span className="w-3 h-3 rounded-full bg-zinc-950 border border-zinc-400"></span>
-                              <span>⚫ 黑色衣服</span>
-                              {isBlack && <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />}
-                            </div>
-                            <span className={`text-[10px] ${isBlack ? 'text-zinc-300' : 'text-slate-400'}`}>
-                              表格颜色填入“黑色”
-                            </span>
+                            黑色
                           </button>
-
-                          {/* 白色按钮 */}
                           <button
                             type="button"
                             onClick={() => handleSetItemColor(item.id, 'white')}
-                            className={`py-2 px-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-1 border ${
-                              isWhite
-                                ? 'bg-blue-600 text-white border-blue-600 shadow-md ring-2 ring-emerald-400'
-                                : 'bg-white hover:bg-blue-50 text-blue-700 border-slate-300'
+                            aria-pressed={isWhite}
+                            className={`flex-1 rounded px-2 py-2 text-xs font-semibold transition-colors ${
+                              isWhite ? 'bg-sky-700 text-white' : 'text-slate-600 hover:bg-white'
                             }`}
                           >
-                            <div className="flex items-center gap-1.5">
-                              <span className="w-3 h-3 rounded-full bg-white border border-slate-300"></span>
-                              <span>⚪ 白色衣服</span>
-                              {isWhite && <Check className="w-3.5 h-3.5 text-emerald-300 stroke-[3]" />}
-                            </div>
-                            <span className={`text-[10px] ${isWhite ? 'text-blue-100' : 'text-slate-400'}`}>
-                              表格颜色填入“白色”
-                            </span>
+                            白色
                           </button>
-                        </div>
-
-                        {/* 表格回填信息提示卡 */}
-                        <div className="pt-1.5 border-t border-slate-200/70 text-[10px] text-slate-500 font-mono space-y-0.5">
-                          <div className="flex items-center justify-between">
-                            <span>表格颜色部分:</span>
-                            <span className={`font-bold ${isBlack ? 'text-zinc-900' : 'text-blue-700'}`}>
-                              EE{startRow + 1}~EE{endRow} = 「{isBlack ? '黑色' : '白色'}」
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between truncate">
-                            <span>直链替换:</span>
-                            <span className="text-emerald-700 font-bold truncate max-w-[150px]">
-                              FV{startRow}~FV{endRow} (已写入)
-                            </span>
-                          </div>
-                        </div>
                       </div>
 
-                      {/* 底部操作条 */}
-                      <div className="flex items-center justify-between gap-2 pt-1 border-t border-slate-100">
+                      <div className="flex items-center justify-between gap-2 border-t border-slate-100 pt-2">
                         <button
                           type="button"
                           onClick={() => {
                             const info = `商品: ${item.title}\n判定衣服颜色: ${isBlack ? '黑色' : '白色'}\nEE列颜色填入值: ${isBlack ? '黑色' : '白色'}\nFV列图片直链: ${item.imageUrl}\n所在行: ${rowRangeLabel}`;
                             safeCopy(info, item.id);
                           }}
-                          className="p-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 text-xs cursor-pointer flex items-center gap-1"
+                          className="rounded p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
                           title="复制该商品映射信息"
+                          aria-label="复制商品映射信息"
                         >
                           {copiedId === item.id ? (
                             <Check className="w-3.5 h-3.5 text-emerald-600" />
                           ) : (
                             <Copy className="w-3.5 h-3.5" />
                           )}
-                          <span className="text-[10px]">复制详情</span>
                         </button>
 
                         <button
                           type="button"
                           onClick={() => handleExportSingle(item, originalIndex)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 cursor-pointer transition-colors"
+                          className="inline-flex items-center gap-1 rounded px-2 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
                           title="导出此款单品上架模板"
+                          aria-label={`导出第 ${originalIndex + 1} 款`}
                         >
                           <Download className="w-3.5 h-3.5" />
                           <span>导出单款</span>
