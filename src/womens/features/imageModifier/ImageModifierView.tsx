@@ -1369,18 +1369,22 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       />
 
       {/* 极简主三步工作流 */}
-      <div className="space-y-6">
+      <div className="space-y-5">
+        <div className="border-b border-blue-100 pb-4">
+          <h1 className="text-lg font-semibold text-slate-900">女士短袖 · 商品上架</h1>
+          <p className="mt-0.5 text-xs text-slate-500">导入商品和模板，生成四色图片后导出上架文件</p>
+        </div>
         {/* 步骤 1 & 2 并排核心卡片 */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* 模块 1：商品信息导入与谷歌翻译 */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left flex flex-col justify-between">
+          <div className="workspace-panel p-4 text-left flex flex-col justify-between">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-sm border border-blue-100">
                     1
                   </div>
-                  <h2 className="text-base font-bold text-slate-900">商品信息导入 & 谷歌翻译</h2>
+                  <h2 className="text-sm font-semibold text-slate-900">商品表格与标题翻译</h2>
                 </div>
                 {products.length > 0 && (
                   <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
@@ -1389,9 +1393,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 )}
               </div>
 
-              <p className="text-xs text-slate-500 leading-relaxed">
-                导入包含<strong>商品标题</strong>与<strong>原图URL</strong>的表格。系统自动剔除中英文标题中的<strong>「商品图片」</strong>、<strong>「棉 / 棉页」</strong>与<strong>「舒适色彩」</strong>（及 Comfort Colors / Cotton / Product Image），并自动调用<strong>谷歌翻译 API</strong>将标题翻译成英文<strong>填入 D6（及各商品 D 列）</strong>。
-              </p>
+              <p className="text-xs text-slate-500">导入商品标题与原图链接，自动清理标题并翻译英文。</p>
 
               {/* 导入操作区 */}
               {tableFile ? (
@@ -1443,23 +1445,21 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           </div>
 
           {/* 模块 2：模板导入 */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left flex flex-col justify-between">
+          <div className="workspace-panel p-4 text-left flex flex-col justify-between">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-sm border border-purple-100">
                     2
                   </div>
-                  <h2 className="text-base font-bold text-slate-900">模板导入</h2>
+                  <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
                   {templateFile ? '自定义底表' : '系统默认模板'}
                 </span>
               </div>
 
-              <p className="text-xs text-slate-500 leading-relaxed">
-                导入目标电商上架模板，数据将自动写入<strong>第 2 个工作表</strong>（C6填原标题，<strong>D6填谷歌翻译英文标题</strong>，EA列填图，DA列填GA发货仓）。
-              </p>
+              <p className="text-xs text-slate-500">使用系统模板，或上传自定义目标底表。</p>
 
               {/* 模板操作区 */}
               {templateFile ? (
@@ -1512,7 +1512,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         </div>
 
         {/* 模块 3：模型调用与白色背景填充至 1340*1785 */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm p-5 sm:p-6 text-left space-y-5">
+        <div className="workspace-panel p-4 text-left space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4">
             <div className="flex items-center gap-2.5">
               <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-sm border border-emerald-100">
@@ -1520,7 +1520,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-base font-bold text-slate-900">四色图生成与 1340*1785 白底填充</h2>
+                  <h2 className="text-sm font-semibold text-slate-900">商品处理与四色图片</h2>
                   <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
                     模型：gpt-image-2.5
                   </span>
@@ -1533,9 +1533,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     100% 确切 1340×1785 白底直链与下载
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  包含<strong>白色、黑色、杏色、绿色</strong>四种颜色；商品标题通过<strong>谷歌翻译 API 自动生成英文并填入 D6</strong>；生成图片<strong>自动通过纯白背景填充统一适配至 1340*1785</strong>。
-                </p>
+                <p className="text-xs text-slate-500 mt-1">白、黑、杏、绿四色图片 · 英文标题 · 上架文件</p>
               </div>
             </div>
 

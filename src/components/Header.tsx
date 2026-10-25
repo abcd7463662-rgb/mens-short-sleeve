@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shirt, Table } from 'lucide-react';
+import { Shirt, Table2 } from 'lucide-react';
 
 interface HeaderProps {
   activeWorkspace: 'men' | 'women';
@@ -8,19 +8,22 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ activeWorkspace, onWorkspaceChange }) => {
   return (
-    <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 px-4 py-2.5 backdrop-blur sm:px-6">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-            <Table className="h-4 w-4" />
+    <header className="app-header sticky top-0 z-30 border-b border-blue-100 bg-white/95 backdrop-blur">
+      <div className="mx-auto flex min-h-16 max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-2 sm:px-6">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-600 text-white">
+            <Table2 className="h-4 w-4" />
           </div>
-          <span className="truncate text-sm font-semibold text-slate-900">短袖上架工作台</span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-900">短袖上架工作台</div>
+            <div className="text-[11px] text-slate-500">商品处理与上架文件</div>
+          </div>
         </div>
-        <nav className="flex items-center gap-1 rounded-md border border-slate-200 bg-slate-50 p-1" aria-label="商品类型">
-          <button type="button" onClick={() => onWorkspaceChange(false)} aria-pressed={activeWorkspace === 'men'} className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium ${activeWorkspace === 'men' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-            <Table className="h-3.5 w-3.5" /> 男士短袖
+        <nav className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-100 bg-blue-50 p-1" aria-label="商品类型">
+          <button type="button" onClick={() => onWorkspaceChange(false)} aria-pressed={activeWorkspace === 'men'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'men' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
+            <Shirt className="h-3.5 w-3.5" /> 男士短袖
           </button>
-          <button type="button" onClick={() => onWorkspaceChange(true)} aria-pressed={activeWorkspace === 'women'} className={`inline-flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium ${activeWorkspace === 'women' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+          <button type="button" onClick={() => onWorkspaceChange(true)} aria-pressed={activeWorkspace === 'women'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'women' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
             <Shirt className="h-3.5 w-3.5" /> 女士短袖
           </button>
         </nav>

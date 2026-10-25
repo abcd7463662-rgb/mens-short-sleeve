@@ -672,7 +672,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   }, [products, colorFilter]);
 
   return (
-    <div className="w-full max-w-7xl mx-auto py-5 px-4 sm:px-6">
+    <div className="w-full max-w-7xl mx-auto py-6 px-4 sm:px-6">
       {/* Hidden File Inputs */}
       <input
         ref={tableInputRef}
@@ -696,10 +696,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       />
 
       {/* 主界面空间 */}
-      <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3">
+      <div className="space-y-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 pb-4">
           <div>
-            <h1 className="text-lg font-semibold text-slate-900">商品上架处理</h1>
+            <h1 className="text-lg font-semibold text-slate-900">男士短袖 · 商品上架</h1>
             <p className="mt-0.5 text-xs text-slate-500">导入商品表格，确认颜色后导出上架文件</p>
           </div>
           {products.length > 0 && <div className="flex flex-wrap items-center gap-2">
@@ -707,7 +707,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <button
                   type="button"
                   onClick={() => setRapidReviewIndex(0)}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-700"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-medium text-white hover:bg-blue-700"
                   title="开启全屏看图，使用快捷键 1(黑) / 2(白) 快速连审"
                 >
                   <Sparkles className="h-3.5 w-3.5" />
@@ -748,9 +748,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         </div>
 
         {/* 步骤 1 & 2 并排卡片 */}
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {/* 模块 1：商品表格上传与直链识别 */}
-          <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left">
+          <div className="workspace-panel flex flex-col justify-between p-4 text-left">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -865,7 +865,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           </div>
 
           {/* 模块 2：上架模板配置 */}
-          <div className="flex flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left">
+          <div className="workspace-panel flex flex-col justify-between p-4 text-left">
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -937,7 +937,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
         {/* 列映射抽屉/配置面板 */}
         {showMappingPanel && tableResult && (
-          <div className="bg-white rounded-2xl border border-blue-200 shadow-sm p-5 text-left animate-in fade-in slide-in-from-top-2 duration-200 space-y-4">
+          <div className="workspace-panel border-blue-200 p-5 text-left animate-in fade-in slide-in-from-top-2 duration-200 space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <Settings2 className="w-4 h-4 text-blue-600" />
@@ -1034,7 +1034,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         )}
 
         {/* 模块 3：人工判定衣服黑白颜色与多方式导出 */}
-        <div className="space-y-3 rounded-lg border border-slate-200 bg-white p-4 text-left">
+        <div className="workspace-panel space-y-3 p-4 text-left">
           <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
             <div className="flex items-baseline gap-2">
               <h2 className="text-sm font-semibold text-slate-900">商品</h2>
@@ -1046,7 +1046,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 type="button"
                 onClick={handleExportCombined}
                 disabled={products.length === 0 || isBatchExporting}
-                className="inline-flex items-center gap-2 rounded-md bg-emerald-700 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Download className={`h-3.5 w-3.5 ${isBatchExporting ? 'animate-bounce' : ''}`} />
                 <span>{isBatchExporting ? '正在生成...' : '导出上架模板'}</span>

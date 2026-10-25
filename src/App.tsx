@@ -39,7 +39,7 @@ export default function App() {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
+    <div className="app-shell min-h-screen flex flex-col text-slate-900 font-sans">
       {/* Top Header */}
       <Header activeWorkspace={activeWorkspace} onWorkspaceChange={switchWorkspace} />
 
@@ -49,8 +49,8 @@ export default function App() {
           <div className="w-full">
             <WomenImageModifierView onShowToast={showToast} />
             <div className="mx-auto w-full max-w-7xl px-4 pb-8 sm:px-6">
-              <details className="border border-slate-200 bg-white">
-                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">女款规格模板生成器</summary>
+              <details className="workspace-panel overflow-hidden">
+                <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-800">女款规格模板生成器</summary>
                 <TemplateGeneratorView onShowToast={showToast} />
               </details>
             </div>

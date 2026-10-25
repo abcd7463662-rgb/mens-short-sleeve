@@ -1,28 +1,77 @@
 @import "tailwindcss";
 
-.womens-workspace {
-  --womens-accent: #334155;
+:root {
+  font-family: Inter, "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #172b4d;
+  background: #f5f9ff;
 }
 
-.womens-workspace .rounded-2xl {
-  border-radius: 0.5rem;
+.app-shell {
+  background: #f5f9ff;
 }
 
-.womens-workspace .rounded-xl {
-  border-radius: 0.375rem;
+.workspace-panel {
+  border: 1px solid #dbe8f7;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(32 79 139 / 5%);
 }
 
-.womens-workspace .rounded-lg {
-  border-radius: 0.375rem;
+.app-shell :is(button, input, select, textarea, summary) {
+  letter-spacing: 0;
 }
 
-.womens-workspace .shadow-sm,
-.womens-workspace .shadow-xs,
-.womens-workspace .shadow-2xs {
+.app-shell :is(button, input, select, textarea):focus-visible,
+.app-shell summary:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.app-shell .womens-workspace :is(.rounded-2xl, .rounded-xl) {
+  border-radius: 8px;
+}
+
+.app-shell .womens-workspace :is(.shadow-sm, .shadow-xs, .shadow-2xs) {
   box-shadow: none;
 }
 
-.womens-workspace .bg-gradient-to-tr {
+.app-shell .womens-workspace .bg-gradient-to-tr {
   background-image: none;
-  background-color: #0f172a;
+  background-color: #2563eb;
+}
+
+.app-shell .womens-workspace button {
+  min-width: 0;
+  white-space: normal;
+}
+
+.app-shell .womens-workspace :is(input, select, textarea) {
+  min-width: 0;
+}
+
+.app-shell .womens-workspace :is(.bg-white, .bg-slate-50) {
+  border-color: #dbe8f7;
+}
+
+@media (max-width: 640px) {
+  .app-shell .womens-workspace .grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.app-shell .womens-workspace [class*="purple-"],
+.app-shell .womens-workspace [class*="indigo-"] {
+  --color-purple-50: #eff6ff;
+  --color-purple-100: #dbeafe;
+  --color-purple-200: #bfdbfe;
+  --color-purple-300: #93c5fd;
+  --color-purple-600: #2563eb;
+  --color-purple-700: #1d4ed8;
+  --color-purple-800: #1e40af;
+  --color-purple-900: #1e3a8a;
+  --color-indigo-50: #eff6ff;
+  --color-indigo-100: #dbeafe;
+  --color-indigo-200: #bfdbfe;
+  --color-indigo-600: #2563eb;
+  --color-indigo-700: #1d4ed8;
 }

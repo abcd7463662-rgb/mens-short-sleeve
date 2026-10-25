@@ -220,21 +220,13 @@ export const TemplateGeneratorView: React.FC<TemplateGeneratorViewProps> = ({ on
       />
 
       {/* Header Info */}
-      <div className="text-center mb-8 space-y-2">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-700 text-xs font-semibold mb-1">
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>跨境电商商品上架标准化生成模板</span>
-        </div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight">
-          电商多工作表上架模板生成器
-        </h1>
-        <p className="text-sm text-slate-500 max-w-2xl mx-auto">
-          支持<strong>女款</strong>、<strong>男款</strong>与<strong>前男后女复合</strong>三种模板格式自由切换，自动写入目标工作表的 SPU (第6行) 与双色 5 码 SKU 矩阵 (第7~16行)。
-        </p>
+      <div className="mb-5 space-y-3 border-b border-blue-100 pb-4">
+        <h2 className="text-sm font-semibold text-slate-900">规格模板设置</h2>
+        <p className="text-xs text-slate-500">选择模板格式，生成对应的 SPU 和 SKU 规格数据。</p>
 
         {/* 女款 / 男款 / 前男后女复合 格式切换栏 */}
-        <div className="pt-3 flex justify-center">
-          <div className="inline-flex flex-wrap items-center justify-center bg-slate-100 p-1 rounded-xl border border-slate-200 shadow-2xs gap-1">
+        <div className="pt-1 flex justify-start">
+          <div className="inline-flex flex-wrap items-center justify-start bg-blue-50 p-1 rounded-md border border-blue-100 gap-1">
             <button
               type="button"
               onClick={() => {
