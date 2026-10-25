@@ -18,6 +18,6 @@ services:
       - key: TENCENT_COS_SECRET_KEY
         sync: false
       - key: WOMEN_TENCENT_COS_BUCKET
-        sync: false
+        value: yxig-1500925420
       - key: WOMEN_TENCENT_COS_REGION
         value: ap-guangzhou
