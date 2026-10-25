@@ -206,7 +206,7 @@ export const TemplateGeneratorView: React.FC<TemplateGeneratorViewProps> = ({ on
   }, [result, selectedCategory]);
 
   return (
-    <div className="w-full max-w-5xl mx-auto py-8 px-4 sm:px-6">
+    <div className="womens-workspace w-full max-w-7xl mx-auto py-6 px-4 sm:px-6">
       {/* Hidden File Input */}
       <input
         ref={fileInputRef}

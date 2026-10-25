@@ -1,1 +1,28 @@
 @import "tailwindcss";
+
+.womens-workspace {
+  --womens-accent: #334155;
+}
+
+.womens-workspace .rounded-2xl {
+  border-radius: 0.5rem;
+}
+
+.womens-workspace .rounded-xl {
+  border-radius: 0.375rem;
+}
+
+.womens-workspace .rounded-lg {
+  border-radius: 0.375rem;
+}
+
+.womens-workspace .shadow-sm,
+.womens-workspace .shadow-xs,
+.womens-workspace .shadow-2xs {
+  box-shadow: none;
+}
+
+.womens-workspace .bg-gradient-to-tr {
+  background-image: none;
+  background-color: #0f172a;
+}

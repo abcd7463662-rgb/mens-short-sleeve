@@ -49,7 +49,7 @@ export default function App() {
           <div className="w-full">
             <WomenImageModifierView onShowToast={showToast} />
             <div className="mx-auto w-full max-w-7xl px-4 pb-8 sm:px-6">
-              <details className="rounded-lg border border-slate-200 bg-white">
+              <details className="border border-slate-200 bg-white">
                 <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">女款规格模板生成器</summary>
                 <TemplateGeneratorView onShowToast={showToast} />
               </details>
