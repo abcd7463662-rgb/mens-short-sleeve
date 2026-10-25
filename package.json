@@ -21,6 +21,7 @@
     "express": "^4.21.2",
     "jszip": "^3.10.2",
     "lucide-react": "^0.546.0",
+    "cos-nodejs-sdk-v5": "^3.0.0",
     "motion": "^12.23.24",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",

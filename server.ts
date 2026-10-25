@@ -437,6 +437,146 @@ async function startServer() {
     fs.createReadStream(TEMPLATE_FILE).pipe(res);
   });
 
+  const WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
+  const WOMEN_TEMPLATE_FILE = path.join(WOMEN_TEMPLATE_DIR, 'template.xlsx');
+  const WOMEN_TEMPLATE_META = path.join(WOMEN_TEMPLATE_DIR, 'meta.json');
+
+  app.get('/api/women/template', (req, res) => {
+    if (!fs.existsSync(WOMEN_TEMPLATE_FILE)) {
+      res.json({ exists: false });
+      return;
+    }
+    let meta: any = {};
+    try {
+      meta = JSON.parse(fs.readFileSync(WOMEN_TEMPLATE_META, 'utf8'));
+    } catch {
+      meta = {};
+    }
+    res.json({ exists: true, name: meta.name || 'women-template.xlsx', savedAt: meta.savedAt });
+  });
+
+  app.get('/api/women/template/file', (req, res) => {
+    if (!fs.existsSync(WOMEN_TEMPLATE_FILE)) {
+      res.status(404).json({ error: '尚未保存女士上架模板' });
+      return;
+    }
+    const meta = JSON.parse(fs.readFileSync(WOMEN_TEMPLATE_META, 'utf8'));
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(meta.name || 'women-template.xlsx')}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(WOMEN_TEMPLATE_FILE).pipe(res);
+  });
+
+  app.post('/api/women/template', (req, res) => {
+    try {
+      const { fileBase64, filename } = req.body;
+      if (typeof fileBase64 !== 'string' || !fileBase64) {
+        res.status(400).json({ error: '缺少模板文件数据' });
+        return;
+      }
+      const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (!buffer.length) {
+        res.status(400).json({ error: '模板文件为空' });
+        return;
+      }
+      fs.mkdirSync(WOMEN_TEMPLATE_DIR, { recursive: true });
+      const safeName = path.basename(String(filename || 'women-template.xlsx'));
+      fs.writeFileSync(WOMEN_TEMPLATE_FILE, buffer);
+      fs.writeFileSync(WOMEN_TEMPLATE_META, JSON.stringify({ name: safeName, savedAt: new Date().toISOString(), size: buffer.length }, null, 2));
+      res.json({ success: true, name: safeName });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '保存女士模板失败' });
+    }
+  });
+
+  app.delete('/api/women/template', (req, res) => {
+    try {
+      fs.rmSync(WOMEN_TEMPLATE_DIR, { recursive: true, force: true });
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '删除女士模板失败' });
+    }
+  });
+
+  app.get('/api/cos/status', async (req, res) => {
+    const secretId = process.env.TENCENT_COS_SECRET_ID;
+    const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+    if (!secretId || !secretKey) {
+      res.json({ configured: false, buckets: [], error: '服务端尚未配置腾讯云 COS 密钥' });
+      return;
+    }
+    try {
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+      cos.getService((err: any, data: any) => {
+        if (err) {
+          res.json({ configured: true, error: err.message || '获取存储桶失败', buckets: [] });
+          return;
+        }
+        const buckets = (data.Buckets || []).map((bucket: any) => ({ name: bucket.Name, region: bucket.Location }));
+        res.json({
+          configured: true,
+          owner: data.Owner?.ID || data.Owner?.DisplayName || '',
+          buckets,
+          defaultBucket: process.env.TENCENT_COS_BUCKET || process.env.WOMEN_TENCENT_COS_BUCKET || '',
+          defaultRegion: process.env.TENCENT_COS_REGION || process.env.WOMEN_TENCENT_COS_REGION || 'ap-guangzhou',
+        });
+      });
+    } catch (err: any) {
+      res.status(500).json({ configured: false, error: err.message || 'COS 初始化失败' });
+    }
+  });
+
+  app.post('/api/cos/upload', async (req, res) => {
+    const secretId = process.env.TENCENT_COS_SECRET_ID;
+    const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+    if (!secretId || !secretKey) {
+      res.status(503).json({ error: '服务端尚未配置腾讯云 COS 密钥' });
+      return;
+    }
+    try {
+      const { imageBase64, imageUrl, filename, bucket, region } = req.body;
+      const targetBucket = String(bucket || process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
+      const targetRegion = String(region || process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim();
+      if (!targetBucket) {
+        res.status(400).json({ error: '请配置腾讯云 COS 存储桶' });
+        return;
+      }
+      let buffer: Buffer | null = null;
+      if (typeof imageBase64 === 'string' && imageBase64) {
+        buffer = Buffer.from(imageBase64.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
+      } else if (typeof imageUrl === 'string' && imageUrl.startsWith('data:image/')) {
+        buffer = Buffer.from(imageUrl.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
+      } else if (typeof imageUrl === 'string' && imageUrl.startsWith('https://')) {
+        const response = await fetch(imageUrl, { signal: AbortSignal.timeout(30000) });
+        if (response.ok) buffer = Buffer.from(await response.arrayBuffer());
+      }
+      if (!buffer?.length || buffer.length > 15 * 1024 * 1024) {
+        res.status(400).json({ error: '图片数据无效或超过 15MB' });
+        return;
+      }
+      const safeFilename = path.basename(String(filename || `img_${Date.now()}.jpg`));
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+      cos.putObject({
+        Bucket: targetBucket,
+        Region: targetRegion,
+        Key: safeFilename,
+        Body: buffer,
+        ContentType: 'image/jpeg',
+        ACL: 'public-read',
+      }, (err: any) => {
+        if (err) {
+          res.status(500).json({ error: err.message || '上传腾讯云失败', code: err.code });
+          return;
+        }
+        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(safeFilename)}`, bucket: targetBucket, region: targetRegion, key: safeFilename });
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '上传腾讯云失败' });
+    }
+  });
+
   app.post('/api/template', async (req, res) => {
     try {
       const { fileBase64, filename } = req.body;

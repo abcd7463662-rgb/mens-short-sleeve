@@ -6,9 +6,29 @@
 import React, { useState, useCallback } from 'react';
 import { Header } from './components/Header';
 import { ImageModifierView } from './features/imageModifier';
+import { ImageModifierView as WomenImageModifierView } from './womens/features/imageModifier';
+import { TemplateGeneratorView } from './womens/features/templateGenerator';
+import { useEffect } from 'react';
 
 export default function App() {
+  const [activeWorkspace, setActiveWorkspace] = useState<'men' | 'women'>(() =>
+    window.location.pathname.startsWith('/women') ? 'women' : 'men'
+  );
   const [toast, setToast] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveWorkspace(window.location.pathname.startsWith('/women') ? 'women' : 'men');
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const switchWorkspace = (women: boolean) => {
+    const nextPath = women ? '/women' : '/';
+    if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
+    setActiveWorkspace(women ? 'women' : 'men');
+  };
 
   const showToast = useCallback((message: string, type: 'success' | 'info' | 'error' = 'info') => {
     const id = Date.now();
@@ -21,11 +41,24 @@ export default function App() {
   return (
     <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
       {/* Top Header */}
-      <Header />
+      <Header activeWorkspace={activeWorkspace} onWorkspaceChange={switchWorkspace} />
 
       {/* Main Workspace - 3-Step Simplified Flow */}
       <main className="flex-1 flex items-start justify-center w-full mx-auto">
-        <ImageModifierView onShowToast={showToast} />
+        <div className={activeWorkspace === 'women' ? 'block w-full' : 'hidden'}>
+          <div className="w-full">
+            <WomenImageModifierView onShowToast={showToast} />
+            <div className="mx-auto w-full max-w-7xl px-4 pb-8 sm:px-6">
+              <details className="rounded-lg border border-slate-200 bg-white">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-700">女款规格模板生成器</summary>
+                <TemplateGeneratorView onShowToast={showToast} />
+              </details>
+            </div>
+          </div>
+        </div>
+        <div className={activeWorkspace === 'men' ? 'block w-full' : 'hidden'}>
+          <ImageModifierView onShowToast={showToast} />
+        </div>
       </main>
 
       {/* Toast Feedback */}
