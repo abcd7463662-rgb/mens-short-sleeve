@@ -600,15 +600,14 @@ async function startServer() {
       const category = resolveWomenCategory(req.query.category || profile?.category);
       if (category) {
         const settings = womenCosSettings();
-        if (settings.secretId && settings.secretKey && settings.bucket) {
-          const COS = (await import('cos-nodejs-sdk-v5')).default;
-          const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
-          const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any) => err ? reject(err) : resolve()));
-          await remove('templates/custom/' + category + '/' + id + '/template.xlsx');
-          await remove('templates/custom/' + category + '/' + id + '/profile.json');
-          const index = (await readWomenCosIndex(category)).filter((item) => item.id !== id);
-          await new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json', Body: Buffer.from(JSON.stringify(index, null, 2)), ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
-        }
+        if (!settings.secretId || !settings.secretKey || !settings.bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置，无法删除永久模板' }); return; }
+        const COS = (await import('cos-nodejs-sdk-v5')).default;
+        const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+        const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any) => err ? reject(err) : resolve()));
+        await remove('templates/custom/' + category + '/' + id + '/template.xlsx');
+        await remove('templates/custom/' + category + '/' + id + '/profile.json');
+        const index = (await readWomenCosIndex(category)).filter((item) => item.id !== id);
+        await new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json', Body: Buffer.from(JSON.stringify(index, null, 2)), ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
       }
       const file = getWomenProfileFile(id);
       if (fs.existsSync(file)) fs.unlinkSync(file);

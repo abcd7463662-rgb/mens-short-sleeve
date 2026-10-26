@@ -30,12 +30,6 @@ export async function saveTemplateProfile(file: File, profile: SavedTemplateProf
   });
   const cosResult = await cosResponse.json().catch(() => ({}));
   if (!cosResponse.ok) throw new Error(cosResult.error || '腾讯云永久备份失败');
-  const response = await fetch('/api/women/templates', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...profile, category: profile.category, fileBase64 }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || '腾讯云已保存，但更新运行缓存失败');
 }
 
 export async function loadTemplateProfileFile(profile: SavedTemplateProfile): Promise<File> {
