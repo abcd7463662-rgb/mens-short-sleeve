@@ -491,6 +491,28 @@ async function startServer() {
       ? value
       : null;
 
+  /** 将自定义模板及其识别配置永久备份到腾讯云 COS。 */
+  app.post('/api/women/templates/cos-backup', async (req, res) => {
+    try {
+      const secretId = process.env.TENCENT_COS_SECRET_ID;
+      const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+      const bucket = String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
+      const region = String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim();
+      if (!secretId || !secretKey || !bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置' }); return; }
+      const { id, fileBase64, profile } = req.body || {};
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '模板档案数据无效' }); return; }
+      const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (!buffer.length) { res.status(400).json({ error: '模板文件为空' }); return; }
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+      const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: bucket, Region: region, Key, Body, ContentType }, (err: any) => err ? reject(err) : resolve()));
+      const prefix = 'templates/custom/' + id;
+      await put(prefix + '/template.xlsx', buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      await put(prefix + '/profile.json', Buffer.from(JSON.stringify(profile || {}, null, 2), 'utf8'), 'application/json; charset=utf-8');
+      res.json({ success: true, permanent: true, bucket, region, prefix, templateUrl: 'https://' + bucket + '.cos.' + region + '.myqcloud.com/' + prefix + '/template.xlsx' });
+    } catch (err: any) { res.status(500).json({ error: err.message || '腾讯云模板备份失败' }); }
+  });
+
   app.get('/api/women/templates', async (_req, res) => {
     res.json(await restoreWomenProfiles());
   });

@@ -202,6 +202,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   ] });
   const [profileFieldsOpen, setProfileFieldsOpen] = useState(false);
   const [profileSheets, setProfileSheets] = useState<Array<{ index: number; name: string }>>([]);
+  const [profileInspection, setProfileInspection] = useState<any>(null);
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [tableFile, setTableFile] = useState<File | null>(null);
@@ -674,6 +675,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     if (!/\.xlsx$/i.test(file.name)) { onShowToast('自定义模板档案请上传 .xlsx 格式文件，以保留工作表与原有样式', 'error'); return; }
     try {
       const inspection = await inspectTemplateFile(file);
+      setProfileInspection(inspection);
       const preferredSheet = inspection.sheets.find((sheet) => sheet.name === '模版') || inspection.sheets.find((sheet) => sheet.isVisible && sheet.index > 0) || inspection.sheets[0];
       const name = profileName.trim() || file.name.replace(/\.(xlsx|xls)$/i, '');
       const config = { ...profileConfig, name, targetSheetIndex: preferredSheet.index };
@@ -698,6 +700,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     try {
       const file = await loadTemplateProfileFile(profile);
       const inspection = await inspectTemplateFile(file);
+      setProfileInspection(inspection);
       setProfileSheets(inspection.sheets.map(({ index, name }) => ({ index, name })));
       setTemplateFile(file);
       setLoadedTemplateCategory(productCategory);
@@ -1613,6 +1616,15 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="自定义模板名称，例如：女士运动短袖" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
               {activeProfileId && templateFile && (
                 <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  {profileInspection && <div className="rounded-lg border border-blue-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div><p className="text-xs font-bold text-slate-800">模板识别结果</p><p className="text-[11px] text-slate-500">已识别 {profileInspection.sheets.length} 个子表，请选择实际填入数据的子表并配置字段位置。</p></div>
+                      <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">识别完成</span>
+                    </div>
+                    <div className="mt-2 max-h-36 space-y-1 overflow-auto">{profileInspection.sheetHeaders.map((sheet: any) => <div key={sheet.sheetIndex} className="flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1.5 text-[11px]">
+                      <span className="font-medium text-slate-700">{sheet.sheetIndex + 1}. {sheet.sheetName}</span><span className="truncate text-slate-500">{sheet.headers.slice(0, 8).map((header: any) => header.column + '：' + header.headerName).join('；') || '未读取到表头'}</span>
+                    </div>)}</div>
+                  </div>}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <label className="text-[11px] text-slate-600">写入子表<select value={profileConfig.targetSheetIndex} onChange={(event) => setProfileConfig((prev) => ({ ...prev, targetSheetIndex: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs">{profileSheets.map((sheet) => <option key={sheet.index} value={sheet.index}>{sheet.index + 1}. {sheet.name}</option>)}</select></label>
                     <label className="text-[11px] text-slate-600">首款起始行<input type="number" min="1" value={profileConfig.startRow} onChange={(event) => setProfileConfig((prev) => ({ ...prev, startRow: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs" /></label>
