@@ -686,16 +686,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         return { ...field, column: match.cell.replace(/\d+$/, ''), rowOffset: Math.max(0, row - profileConfig.startRow) };
       }) };
       const profile: SavedTemplateProfile = { id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, filename: file.name, config, savedAt: new Date().toISOString() };
-      await saveTemplateProfile(file, profile);
       setTemplateProfiles((prev) => [...prev, profile]);
       setActiveProfileId(profile.id);
       setProfileMode(true);
       setProfileName(name);
       setProfileConfig(config);
+      setProfileFieldsOpen(true);
       setProfileSheets(inspection.sheets.map(({ index, name }) => ({ index, name })));
       setTemplateFile(file);
       setLoadedTemplateCategory(productCategory);
-      onShowToast(`模板「${name}」已保存；已选择工作表「${preferredSheet.name}」，请核对写入映射后保存配置。`, 'success');
+      onShowToast(`已识别模板「${name}」，请配置写入位置、修改模板名称后点击保存。`, 'success');
     } catch (error: any) { onShowToast(error.message || '模板读取或保存失败', 'error'); }
     finally { if (profileInputRef.current) profileInputRef.current.value = ''; }
   };
@@ -1629,7 +1629,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="自定义模板名称，例如：女士运动短袖" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
               {activeProfileId && templateFile && (
                 <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  {profileInspection && <div className="rounded-lg border border-blue-200 bg-white p-3">
+                  {false && profileInspection && <div className="rounded-lg border border-blue-200 bg-white p-3">
                     <div className="flex items-center justify-between gap-2">
                       <div><p className="text-xs font-bold text-slate-800">模板识别结果</p><p className="text-[11px] text-slate-500">已识别 {profileInspection.sheets.length} 个子表，请选择实际填入数据的子表并配置字段位置。</p></div>
                       <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">识别完成</span>
