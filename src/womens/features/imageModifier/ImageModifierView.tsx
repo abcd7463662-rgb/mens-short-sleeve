@@ -678,7 +678,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       setProfileInspection(inspection);
       const preferredSheet = inspection.sheets.find((sheet) => sheet.name === '模版') || inspection.sheets.find((sheet) => sheet.isVisible && sheet.index > 0) || inspection.sheets[0];
       const name = profileName.trim() || file.name.replace(/\.(xlsx|xls)$/i, '');
-      const config = { ...profileConfig, name, targetSheetIndex: preferredSheet.index };
+      const detected = inspection.detectedLabels.filter((item) => item.sheetIndex === preferredSheet.index);
+      const config = { ...profileConfig, name, targetSheetIndex: preferredSheet.index, fields: profileConfig.fields.map((field) => {
+        const match = detected.find((item) => item.field === field.source);
+        if (!match) return field;
+        const row = Number(match.cell.match(/\d+$/)?.[0] || profileConfig.startRow);
+        return { ...field, column: match.cell.replace(/\d+$/, ''), rowOffset: Math.max(0, row - profileConfig.startRow) };
+      }) };
       const profile: SavedTemplateProfile = { id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, filename: file.name, config, savedAt: new Date().toISOString() };
       await saveTemplateProfile(file, profile);
       setTemplateProfiles((prev) => [...prev, profile]);
@@ -728,6 +734,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   const updateProfileField = (id: string, updates: Partial<SavedTemplateField>) => {
     setProfileConfig((prev) => ({ ...prev, fields: prev.fields.map((field) => field.id === id ? { ...field, ...updates } : field) }));
+  };
+
+  const applyDetectedLabel = (fieldId: string, cell: string) => {
+    const row = Number(cell.match(/\d+$/)?.[0] || profileConfig.startRow);
+    const column = cell.replace(/\d+$/, '');
+    updateProfileField(fieldId, { column, rowOffset: Math.max(0, row - profileConfig.startRow) });
+    onShowToast(`已将字段定位到 ${cell}，请确认后保存规则`, 'info');
   };
 
   const addProfileField = () => {
@@ -1623,7 +1636,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     </div>
                     <div className="mt-2 max-h-36 space-y-1 overflow-auto">{profileInspection.sheetHeaders.map((sheet: any) => <div key={sheet.sheetIndex} className="flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1.5 text-[11px]">
                       <span className="font-medium text-slate-700">{sheet.sheetIndex + 1}. {sheet.sheetName}</span><span className="truncate text-slate-500">{sheet.headers.slice(0, 8).map((header: any) => header.column + '：' + header.headerName).join('；') || '未读取到表头'}</span>
-                    </div>)}</div>
+                    </div>)}
+                    {profileInspection.detectedLabels?.filter((item: any) => item.sheetIndex === profileConfig.targetSheetIndex).length > 0 && <div className="mt-2 border-t border-slate-100 pt-2"><p className="text-[11px] font-semibold text-slate-700">文字定位候选（点击即可应用）</p><div className="mt-1 flex flex-wrap gap-1">{profileInspection.detectedLabels.filter((item: any) => item.sheetIndex === profileConfig.targetSheetIndex).map((item: any) => <button key={item.cell + item.field} type="button" onClick={() => { const field = profileConfig.fields.find((candidate) => candidate.source === item.field); if (field) applyDetectedLabel(field.id, item.cell); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] text-blue-700 hover:bg-blue-100">{item.text} → {item.cell}</button>)}</div></div>}
+                    <p className="mt-2 text-[10px] text-slate-500">未识别或识别不准确时，可直接在下方修改目标列和行偏移；手动修改会覆盖自动定位结果。</p></div>
                   </div>}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <label className="text-[11px] text-slate-600">写入子表<select value={profileConfig.targetSheetIndex} onChange={(event) => setProfileConfig((prev) => ({ ...prev, targetSheetIndex: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs">{profileSheets.map((sheet) => <option key={sheet.index} value={sheet.index}>{sheet.index + 1}. {sheet.name}</option>)}</select></label>

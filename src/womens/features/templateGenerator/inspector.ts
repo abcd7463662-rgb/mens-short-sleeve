@@ -32,6 +32,20 @@ export interface TemplateInspectionResult {
   fileName: string;
   sheets: SheetInfo[];
   sheetHeaders: TemplateSheetHeaderInfo[];
+  detectedLabels: Array<{ sheetIndex: number; sheetName: string; cell: string; text: string; field: 'title' | 'englishTitle' | 'spuCode' | 'whiteImage' | 'blackImage' | 'static'; confidence: number }>;
+}
+
+const LABEL_RULES: Array<{ words: string[]; field: TemplateInspectionResult['detectedLabels'][number]['field']; confidence: number }> = [
+  { words: ['商品标题', '中文标题', '标题'], field: 'title', confidence: 0.95 },
+  { words: ['英文标题', '英文名', 'english title'], field: 'englishTitle', confidence: 0.95 },
+  { words: ['spu', '商品编码', '款号'], field: 'spuCode', confidence: 0.92 },
+  { words: ['白色图片', '白图', 'white image'], field: 'whiteImage', confidence: 0.9 },
+  { words: ['黑色图片', '黑图', 'black image'], field: 'blackImage', confidence: 0.9 },
+];
+
+function detectLabel(text: string) {
+  const normalized = text.toLowerCase().replaceAll(' ', '');
+  return LABEL_RULES.find((rule) => rule.words.some((word) => normalized.includes(word.toLowerCase().replaceAll(' ', ''))));
 }
 
 /**
@@ -52,6 +66,7 @@ export async function inspectTemplateFile(file: File): Promise<TemplateInspectio
     }));
 
     const sheetHeaders: TemplateSheetHeaderInfo[] = [];
+    const detectedLabels: TemplateInspectionResult['detectedLabels'] = [];
 
     workbook.worksheets.forEach((ws, sheetIdx) => {
       const headersMap = new Map<
@@ -79,6 +94,8 @@ export async function inspectTemplateFile(file: File): Promise<TemplateInspectio
 
             if (valStr) {
               const colLetter = indexToColumnLetter(colNumber);
+              const detected = detectLabel(valStr);
+              if (detected) detectedLabels.push({ sheetIndex: sheetIdx, sheetName: ws.name, cell: `${colLetter}${r}`, text: valStr, field: detected.field, confidence: detected.confidence });
               if (!headersMap.has(colNumber)) {
                 headersMap.set(colNumber, {
                   column: colLetter,
@@ -114,6 +131,7 @@ export async function inspectTemplateFile(file: File): Promise<TemplateInspectio
       fileName: file.name,
       sheets,
       sheetHeaders,
+      detectedLabels,
     };
   } catch (err) {
     console.warn('ExcelJS inspection failed, fallback to XLSX:', err);
@@ -175,6 +193,7 @@ export async function inspectTemplateFile(file: File): Promise<TemplateInspectio
       fileName: file.name,
       sheets,
       sheetHeaders,
+      detectedLabels: [],
     };
   }
 }
