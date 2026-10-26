@@ -152,6 +152,19 @@ async function writeGithubFile(
   }
 }
 
+async function deleteGithubFile(filePath: string, message: string): Promise<void> {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) throw new Error('GitHub 持久化权限未配置');
+  const existing = await readGithubFile(filePath);
+  if (!existing) return;
+  const response = await fetch(`https://api.github.com/repos/${githubRepo()}/contents/${filePath}`, {
+    method: 'DELETE',
+    headers: githubHeaders(token),
+    body: JSON.stringify({ message, sha: existing.sha, branch: STORE_BRANCH }),
+  });
+  if (!response.ok) throw new Error(`GitHub 删除失败 (${response.status}): ${(await response.text()).slice(0, 200)}`);
+}
+
 /**
  * 把模板提交到 template-store 分支，做到跨重新部署、跨设备长期保存。
  * 未配置 GITHUB_TOKEN 时返回 false，只保留磁盘副本。
@@ -438,6 +451,30 @@ async function startServer() {
   });
 
   const WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
+  const WOMEN_PROFILES_FILE = path.join(WOMEN_TEMPLATE_DIR, 'profiles.json');
+  const WOMEN_PROFILES_BRANCH_PATH = 'women_template_storage/profiles.json';
+  const getWomenProfileFile = (id: string) => path.join(WOMEN_TEMPLATE_DIR, 'profiles', `${id}.xlsx`);
+  const getWomenProfileBranchPath = (id: string) => `women_template_storage/profiles/${id}.xlsx`;
+  const readWomenProfiles = (): any[] => {
+    try { return JSON.parse(fs.readFileSync(WOMEN_PROFILES_FILE, 'utf8')); } catch { return []; }
+  };
+  const writeWomenProfiles = async (profiles: any[]) => {
+    fs.mkdirSync(WOMEN_TEMPLATE_DIR, { recursive: true });
+    fs.writeFileSync(WOMEN_PROFILES_FILE, JSON.stringify(profiles, null, 2));
+    if (githubCanWrite() && await ensureStoreBranch()) {
+      await writeGithubFile(WOMEN_PROFILES_BRANCH_PATH, Buffer.from(JSON.stringify(profiles, null, 2)).toString('base64'), 'chore: update saved women template profiles');
+    }
+  };
+  const restoreWomenProfiles = async () => {
+    if (fs.existsSync(WOMEN_PROFILES_FILE)) return readWomenProfiles();
+    try {
+      const saved = await readGithubFile(WOMEN_PROFILES_BRANCH_PATH);
+      if (!saved) return [];
+      fs.mkdirSync(WOMEN_TEMPLATE_DIR, { recursive: true });
+      fs.writeFileSync(WOMEN_PROFILES_FILE, saved.buffer);
+      return readWomenProfiles();
+    } catch { return []; }
+  };
   const LEGACY_WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
   const WOMEN_TEMPLATE_CATEGORIES = ['womens-plus-tee', 'womens-standard-tee', 'mens-hoodie', 'womens-hoodie'] as const;
   const getWomenTemplatePaths = (category: string) => {
@@ -453,6 +490,63 @@ async function startServer() {
     typeof value === 'string' && WOMEN_TEMPLATE_CATEGORIES.includes(value as (typeof WOMEN_TEMPLATE_CATEGORIES)[number])
       ? value
       : null;
+
+  app.get('/api/women/templates', async (_req, res) => {
+    res.json(await restoreWomenProfiles());
+  });
+
+  app.get('/api/women/templates/:id/file', async (req, res) => {
+    const id = String(req.params.id || '');
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) { res.status(400).json({ error: '模板编号无效' }); return; }
+    let file = getWomenProfileFile(id);
+    if (!fs.existsSync(file)) {
+      try {
+        const saved = await readGithubFile(getWomenProfileBranchPath(id));
+        if (saved) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, saved.buffer); }
+      } catch { /* 返回未找到 */ }
+    }
+    if (!fs.existsSync(file)) { res.status(404).json({ error: '找不到已保存模板文件' }); return; }
+    const profile = (await restoreWomenProfiles()).find((item) => item.id === id);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(profile?.filename || 'template.xlsx')}"`);
+    res.setHeader('Cache-Control', 'no-store');
+    fs.createReadStream(file).pipe(res);
+  });
+
+  app.post('/api/women/templates', async (req, res) => {
+    try {
+      if (!githubCanWrite()) { res.status(503).json({ error: '服务端未配置 GitHub 持久化权限，无法永久保存模板。请配置 GITHUB_TOKEN 后重试。' }); return; }
+      const { id, name, filename, fileBase64, config } = req.body || {};
+      if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || typeof name !== 'string' || !name.trim()) { res.status(400).json({ error: '请提供有效的模板名称' }); return; }
+      if (typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '请选择模板文件' }); return; }
+      const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (!buffer.length) { res.status(400).json({ error: '模板文件为空' }); return; }
+      const file = getWomenProfileFile(id);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, buffer);
+      const profiles = await restoreWomenProfiles();
+      const profile = { id, name: name.trim().slice(0, 100), filename: path.basename(String(filename || 'template.xlsx')), config, savedAt: new Date().toISOString(), size: buffer.length };
+      const next = [...profiles.filter((item) => item.id !== id), profile];
+      await ensureStoreBranch();
+      await writeGithubFile(getWomenProfileBranchPath(id), buffer.toString('base64'), `chore: save women template (${profile.name})`);
+      await writeWomenProfiles(next);
+      res.json({ success: true, permanent: true, profile });
+    } catch (err: any) { res.status(500).json({ error: err.message || '保存模板失败' }); }
+  });
+
+  app.delete('/api/women/templates/:id', async (req, res) => {
+    const id = String(req.params.id || '');
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) { res.status(400).json({ error: '模板编号无效' }); return; }
+    try {
+      if (!githubCanWrite()) { res.status(503).json({ error: '服务端未配置 GitHub 持久化权限，无法永久保存模板。' }); return; }
+      await deleteGithubFile(getWomenProfileBranchPath(id), 'chore: delete saved women template');
+      const file = getWomenProfileFile(id);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      const nextProfiles = (await restoreWomenProfiles()).filter((item) => item.id !== id);
+      await writeWomenProfiles(nextProfiles);
+      res.json({ success: true });
+    } catch (err: any) { res.status(500).json({ error: err.message || '删除模板失败' }); }
+  });
 
   app.get('/api/women/template', (req, res) => {
     const category = resolveWomenCategory(req.query.category);

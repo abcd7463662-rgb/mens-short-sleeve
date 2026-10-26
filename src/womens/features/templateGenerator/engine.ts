@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
+import JSZip from 'jszip';
 import { SheetInfo, CellModification, TemplateResult, CellRule } from './types';
 import {
   TEMPLATE_RULES,
@@ -7,6 +8,136 @@ import {
   buildMultiProductTemplateRules,
   ProductTemplateInput,
 } from './rules';
+
+export interface SavedTemplateField {
+  id: string;
+  label: string;
+  source: 'title' | 'englishTitle' | 'spuCode' | 'whiteImage' | 'blackImage' | 'static';
+  column: string;
+  rowOffset: number;
+  repeatCount?: number;
+  rowStep?: number;
+  staticValue?: string;
+}
+
+export interface SavedTemplateConfig {
+  name: string;
+  targetSheetIndex: number;
+  startRow: number;
+  rowsPerProduct: number;
+  fields: SavedTemplateField[];
+}
+
+export async function generateMappedTemplateFile(options: {
+  file: File;
+  config: SavedTemplateConfig;
+  products: ProductTemplateInput[];
+  filename: string;
+}): Promise<TemplateResult> {
+  const { file, config, products, filename } = options;
+  if (!Number.isInteger(config.targetSheetIndex) || config.targetSheetIndex < 0 || !Number.isInteger(config.startRow) || config.startRow < 1 || !Number.isInteger(config.rowsPerProduct) || config.rowsPerProduct < 1) {
+    throw new Error('模板的子表、起始行或每款行数配置无效');
+  }
+  for (const field of config.fields) {
+    const repeatCount = field.repeatCount || 1;
+    const rowStep = field.rowStep || 1;
+    if (!/^[A-Z]{1,3}$/.test(field.column.toUpperCase()) || !Number.isInteger(field.rowOffset) || field.rowOffset < 0 || field.rowOffset >= config.rowsPerProduct || !Number.isInteger(repeatCount) || repeatCount < 1 || !Number.isInteger(rowStep) || rowStep < 1 || field.rowOffset + (repeatCount - 1) * rowStep >= config.rowsPerProduct) {
+      throw new Error(`字段「${field.label}」的列或行偏移无效`);
+    }
+  }
+  const zip = await JSZip.loadAsync(await file.arrayBuffer());
+  const workbookXmlFile = zip.file('xl/workbook.xml');
+  const relsFile = zip.file('xl/_rels/workbook.xml.rels');
+  if (!workbookXmlFile || !relsFile) throw new Error('无法读取 Excel 工作簿结构');
+  const workbookXml = await workbookXmlFile.async('string');
+  const relsXml = await relsFile.async('string');
+  const sheetTags = [...workbookXml.matchAll(/<sheet\b[^>]*\/>|<sheet\b[^>]*>[\s\S]*?<\/sheet>/g)].map((match) => match[0]);
+  const sheetTag = sheetTags[config.targetSheetIndex];
+  if (!sheetTag) throw new Error('所选目标子表不存在，请重新编辑模板配置');
+  const sheetName = sheetTag.match(/\bname="([^"]+)"/)?.[1] || `工作表${config.targetSheetIndex + 1}`;
+  const relId = sheetTag.match(/r:id="([^"]+)"/)?.[1];
+  const relation = relId && [...relsXml.matchAll(/<Relationship\b[^>]*\/>/g)].map((match) => match[0]).find((tag) => tag.match(/\bId="([^"]+)"/)?.[1] === relId);
+  const target = relation?.match(/\bTarget="([^"]+)"/)?.[1];
+  if (!target) throw new Error('无法解析目标工作表文件');
+  const sheetPath = target.startsWith('/') ? target.slice(1) : `xl/${target.replace(/^\.\//, '')}`;
+  const sheetXmlFile = zip.file(sheetPath);
+  if (!sheetXmlFile) throw new Error(`找不到目标工作表「${sheetName}」的数据文件`);
+  let sheetXml = await sheetXmlFile.async('string');
+  const mergedRanges = [...sheetXml.matchAll(/<mergeCell\b[^>]*\bref="([A-Z]+\d+):([A-Z]+\d+)"[^>]*\/>/g)].map((match) => ({ start: match[1], end: match[2] }));
+  const columnNumber = (letters: string) => [...letters].reduce((value, letter) => value * 26 + letter.charCodeAt(0) - 64, 0);
+  const cellParts = (address: string) => { const match = address.match(/^([A-Z]+)(\d+)$/); return match ? { col: columnNumber(match[1]), row: Number(match[2]) } : null; };
+  const resolveMergedMaster = (address: string) => {
+    const cell = cellParts(address);
+    if (!cell) return address;
+    for (const range of mergedRanges) {
+      const start = cellParts(range.start); const end = cellParts(range.end);
+      if (start && end && cell.row >= start.row && cell.row <= end.row && cell.col >= start.col && cell.col <= end.col) return range.start;
+    }
+    return address;
+  };
+  const modifications: CellModification[] = [];
+  const xmlEscape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  const setCellValue = (address: string, value: string | number) => {
+    const escaped = xmlEscape(String(value));
+    const existingCell = new RegExp(`<c\b(?=[^>]*\br="${address}")[^>]*(?:\/>|>[\s\S]*?<\/c>)`);
+    const match = sheetXml.match(existingCell);
+    if (match) {
+      const opening = match[0].match(/^<c\b[^>]*?(?=\s*\/?>)/)?.[0] || `<c r="${address}"`;
+      const style = opening.match(/\bs="[^"]*"/)?.[0];
+      const replacement = `<c r="${address}"${style ? ` ${style}` : ''} t="inlineStr"><is><t xml:space="preserve">${escaped}</t></is></c>`;
+      sheetXml = sheetXml.replace(match[0], replacement);
+    } else {
+      const rowNumber = Number(address.match(/\d+$/)?.[0]);
+      const rowRegex = new RegExp(`<row\b(?=[^>]*\br="${rowNumber}")[^>]*>`);
+      const rowMatch = sheetXml.match(rowRegex);
+      const cellXml = `<c r="${address}" t="inlineStr"><is><t xml:space="preserve">${escaped}</t></is></c>`;
+      if (rowMatch) {
+        const rowStart = sheetXml.indexOf(rowMatch[0]) + rowMatch[0].length;
+        const rowEnd = sheetXml.indexOf('</row>', rowStart);
+        if (rowEnd < 0) throw new Error(`无法扩展工作表第 ${rowNumber} 行`);
+        const rowBody = sheetXml.slice(rowStart, rowEnd);
+        const nextCell = [...rowBody.matchAll(/<c\b[^>]*\br="([A-Z]+)\d+"[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)]
+          .find((candidate) => columnNumber(candidate[1]) > columnNumber(address.match(/^[A-Z]+/)?.[0] || 'A'));
+        const insertAt = nextCell?.index === undefined ? rowEnd : rowStart + nextCell.index;
+        sheetXml = `${sheetXml.slice(0, insertAt)}${cellXml}${sheetXml.slice(insertAt)}`;
+      } else {
+        const sheetDataEnd = sheetXml.indexOf('</sheetData>');
+        if (sheetDataEnd < 0) throw new Error('无法定位工作表数据区域');
+        const newRow = `<row r="${rowNumber}">${cellXml}</row>`;
+        const followingRow = new RegExp(`<row\\b(?=[^>]*\\br="(\\d+)")[^>]*>`).exec(sheetXml.slice(0, sheetDataEnd));
+        let insertAt = sheetDataEnd;
+        if (followingRow) {
+          const candidates = [...sheetXml.slice(0, sheetDataEnd).matchAll(/<row\b(?=[^>]*\br="(\d+)")[^>]*>/g)];
+          const next = candidates.find((candidate) => Number(candidate[1]) > rowNumber);
+          if (next && next.index !== undefined) insertAt = next.index;
+        }
+        sheetXml = `${sheetXml.slice(0, insertAt)}${newRow}${sheetXml.slice(insertAt)}`;
+      }
+    }
+  };
+  products.forEach((product, productIndex) => {
+    for (const field of config.fields) {
+      for (let repeatIndex = 0; repeatIndex < (field.repeatCount || 1); repeatIndex++) {
+        const row = config.startRow + productIndex * config.rowsPerProduct + field.rowOffset + repeatIndex * (field.rowStep || 1);
+        const cellAddress = resolveMergedMaster(`${field.column.toUpperCase()}${row}`);
+        const existingCell = new RegExp(`<c\b(?=[^>]*\br="${cellAddress}")[^>]*(?:\/>|>[\s\S]*?<\/c>)`).exec(sheetXml)?.[0];
+        const originalValue = existingCell?.match(/<v>([\s\S]*?)<\/v>/)?.[1] || '(空白)';
+        const value = field.source === 'static' ? field.staticValue || '' : ({ title: product.title, englishTitle: product.englishTitle || '', spuCode: product.spuCode || '', whiteImage: product.whiteImageUrl || '', blackImage: product.blackImageUrl || '' })[field.source];
+        setCellValue(cellAddress, value);
+        modifications.push({ cell: cellAddress, column: field.column.toUpperCase(), value, originalValue, verifiedValue: String(value), category: field.label });
+      }
+    }
+  });
+  zip.file(sheetPath, sheetXml);
+  if (!config.fields.length) throw new Error('请至少配置一个要写入模板的字段');
+  const buffer = await zip.generateAsync({ type: 'arraybuffer', compression: 'DEFLATE' });
+  return {
+    fileName: filename, targetSheetName: sheetName, targetSheetIndex: config.targetSheetIndex,
+    allSheets: sheetTags.map((tag, index) => ({ index, name: tag.match(/\bname="([^"]+)"/)?.[1] || `工作表${index + 1}`, isVisible: !/\bstate="hidden"/.test(tag), isTarget: index === config.targetSheetIndex })),
+    modifications, outputBlob: new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    message: `已按「${config.name}」配置写入 ${products.length} 款商品，保留其他工作表`,
+  };
+}
 
 /**
  * 「生成模板」引擎：

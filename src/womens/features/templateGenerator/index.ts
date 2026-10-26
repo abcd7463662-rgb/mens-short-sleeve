@@ -24,6 +24,8 @@ export {
   createDefaultProductTemplate,
   createDefaultMultiProductTemplate,
 } from './engine';
+export { generateMappedTemplateFile } from './engine';
+export type { SavedTemplateConfig, SavedTemplateField } from './engine';
 export { inspectTemplateFile, indexToColumnLetter, columnLetterToIndex } from './inspector';
 export type {
   TemplateResult,
