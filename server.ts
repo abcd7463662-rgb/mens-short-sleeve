@@ -682,6 +682,66 @@ async function startServer() {
     }
   });
 
+  const getStoreLinksKey = (value: unknown) => value === 'Y店' || value === 'H店' ? value : null;
+  const getStoreLinksSettings = () => ({
+    secretId: process.env.TENCENT_COS_SECRET_ID || '',
+    secretKey: process.env.TENCENT_COS_SECRET_KEY || '',
+    bucket: String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim(),
+    region: String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim(),
+  });
+  const parseStoreLinks = (value: string): string[] => {
+    try {
+      const parsed = JSON.parse(value);
+      const urls = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.urls) ? parsed.urls : [];
+      return urls.map((url: unknown) => String(url || '').trim()).filter((url: string) => /^https?:\/\//i.test(url));
+    } catch {
+      return value.split(/[\r\n]+/).map((line) => line.trim()).filter((line) => /^https?:\/\//i.test(line));
+    }
+  };
+  const readStoreLinks = async (storeName: 'Y店' | 'H店') => {
+    const settings = getStoreLinksSettings();
+    if (settings.secretId && settings.secretKey && settings.bucket) {
+      try {
+        const COS = (await import('cos-nodejs-sdk-v5')).default;
+        const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+        const body = await new Promise<Buffer | null>((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: storeName }, (err: any, data: any) => resolve(err || !data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body))));
+        if (body) return parseStoreLinks(body.toString('utf8'));
+        const jsonBody = await new Promise<Buffer | null>((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: storeName + '.json' }, (err: any, data: any) => resolve(err || !data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body))));
+        if (jsonBody) return parseStoreLinks(jsonBody.toString('utf8'));
+      } catch (error) { console.warn('COS store links read fallback:', error); }
+    }
+    try { return parseStoreLinks(fs.readFileSync(path.join(process.cwd(), 'store_records', storeName + '.json'), 'utf8')); } catch { return []; }
+  };
+
+  app.get('/api/cos/store-links/read', async (req, res) => {
+    const storeName = getStoreLinksKey(req.query.storeName);
+    if (!storeName) { res.status(400).json({ error: '店铺名称无效' }); return; }
+    const urls = await readStoreLinks(storeName);
+    res.json({ success: true, storeName, urls, totalCount: urls.length });
+  });
+
+  app.post('/api/cos/store-links/save', async (req, res) => {
+    try {
+      const storeName = getStoreLinksKey(req.body?.storeName);
+      if (!storeName) { res.status(400).json({ error: '店铺名称无效' }); return; }
+      const input = Array.isArray(req.body?.urls) ? req.body.urls.map((url: unknown) => String(url || '').trim()).filter((url: string) => /^https?:\/\//i.test(url)) : [];
+      const existing = await readStoreLinks(storeName);
+      const urls = [...new Set([...existing, ...input])];
+      const payload = Buffer.from(JSON.stringify({ store: storeName, updatedAt: new Date().toISOString(), totalCount: urls.length, urls }, null, 2), 'utf8');
+      const settings = getStoreLinksSettings();
+      if (!settings.secretId || !settings.secretKey || !settings.bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置，历史链接未能永久保存' }); return; }
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+      const put = (Key: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key, Body: payload, ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
+      await put(storeName);
+      await put(storeName + '.json');
+      const localDir = path.join(process.cwd(), 'store_records');
+      fs.mkdirSync(localDir, { recursive: true });
+      fs.writeFileSync(path.join(localDir, storeName + '.json'), payload);
+      res.json({ success: true, storeName, totalCount: urls.length, addedCount: urls.length - existing.length });
+    } catch (error: any) { res.status(500).json({ error: error.message || '保存店铺历史链接失败' }); }
+  });
+
   app.get('/api/cos/status', async (req, res) => {
     const secretId = process.env.TENCENT_COS_SECRET_ID;
     const secretKey = process.env.TENCENT_COS_SECRET_KEY;
