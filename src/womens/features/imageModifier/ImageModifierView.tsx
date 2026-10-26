@@ -958,11 +958,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
       return;
     }
-    if (localPathFormat === 'publicUrl' && (!p.whiteUrl || !p.blackUrl)) {
-      onShowToast('⚠️ 该商品的四色主图尚未生成，请先在下方点击生成，成功后即可自动导出公网直链！', 'error');
-      return;
-    }
-
     try {
       const cleanedTitle = cleanChineseTitle(p.title) || p.title;
       const cleanedEng = cleanEnglishTitle(p.englishTitle || cleanedTitle);
@@ -1021,6 +1016,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
   };
 
+  const handleDeleteProduct = (product: ProductItem) => {
+    if (!window.confirm(`确定删除商品「${product.title}」吗？`)) return;
+    setProducts((prev) => prev.filter((item) => item.id !== product.id));
+    if (editingId === product.id) setEditingId(null);
+    onShowToast(`已删除商品「${product.title}」`, 'success');
+  };
+
   // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
   const handleExportCombined = async () => {
     if (!activeCategory.configured) {
@@ -1030,14 +1032,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     if (products.length === 0) {
       onShowToast('请先在第 1 步导入商品信息', 'error');
       return;
-    }
-
-    if (localPathFormat === 'publicUrl') {
-      const unfinished = products.some((p) => !p.whiteUrl || !p.blackUrl);
-      if (unfinished) {
-        onShowToast('⚠️ 检测到有商品的四色图片尚未生成。请先在下方点击【自动生成全部】，全部生成成功后即可导出完整的公网直链表格！', 'error');
-        return;
-      }
     }
 
     setIsBatchExporting(true);
@@ -1066,33 +1060,25 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         let whiteImg = p.whiteUrl || '';
         let blackImg = p.blackUrl || '';
 
-        if (cosBucket.trim()) {
-          const missingCos = [
-            !p.whiteUrl?.includes('.myqcloud.com') ? '白色' : '',
-            !p.blackUrl?.includes('.myqcloud.com') ? '黑色' : '',
-            p.apricotUrl && !p.apricotUrl.includes('.myqcloud.com') ? '杏色' : '',
-            p.greenUrl && !p.greenUrl.includes('.myqcloud.com') ? '绿色' : '',
-          ].filter(Boolean);
-          if (missingCos.length) {
-            throw new Error(`商品「${p.title}」的${missingCos.join('、')}图片尚未确认上传到 COS，请先点击“同步全部图片至腾讯云 COS”再导出。`);
-          }
-        } else if (customCdnPrefix.trim()) {
+        const hasWhite = Boolean(p.whiteUrl && (!cosBucket.trim() || p.whiteUrl.includes('.myqcloud.com')));
+        const hasBlack = Boolean(p.blackUrl && (!cosBucket.trim() || p.blackUrl.includes('.myqcloud.com')));
+        if (!cosBucket.trim() && customCdnPrefix.trim()) {
           let cleanPrefix = customCdnPrefix.trim();
           if (cleanPrefix.endsWith('/')) cleanPrefix = cleanPrefix.slice(0, -1);
           const fnWhite = getDownloadedFilename(p.title, 'white', p.spuCode);
-          whiteImg = `${cleanPrefix}/${fnWhite}`;
+          whiteImg = hasWhite ? `${cleanPrefix}/${fnWhite}` : '';
           const fnBlack = getDownloadedFilename(p.title, 'black', p.spuCode);
-          blackImg = `${cleanPrefix}/${fnBlack}`;
-        } else if (localFolderPath.trim() && localPathFormat !== 'publicUrl') {
+          blackImg = hasBlack ? `${cleanPrefix}/${fnBlack}` : '';
+        } else if (!cosBucket.trim() && localFolderPath.trim() && localPathFormat !== 'publicUrl') {
           const fnWhite = getDownloadedFilename(p.title, 'white', p.spuCode);
-          whiteImg = getLocalFilePath(localFolderPath, fnWhite, localPathFormat);
+          whiteImg = hasWhite ? getLocalFilePath(localFolderPath, fnWhite, localPathFormat) : '';
           
           const fnBlack = getDownloadedFilename(p.title, 'black', p.spuCode);
-          blackImg = getLocalFilePath(localFolderPath, fnBlack, localPathFormat);
+          blackImg = hasBlack ? getLocalFilePath(localFolderPath, fnBlack, localPathFormat) : '';
         }
 
-        const apricotImg = p.apricotUrl || '';
-        const greenImg = p.greenUrl || '';
+        const apricotImg = p.apricotUrl && (!cosBucket.trim() || p.apricotUrl.includes('.myqcloud.com')) ? p.apricotUrl : '';
+        const greenImg = p.greenUrl && (!cosBucket.trim() || p.greenUrl.includes('.myqcloud.com')) ? p.greenUrl : '';
 
         return {
           title: cTitle,
@@ -1116,8 +1102,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       });
 
       downloadTemplateFile(res.outputBlob, res.fileName);
+      const missingImages = currentProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !url.includes('.myqcloud.com'))).length, 0);
       onShowToast(
-        localFolderPath.trim()
+        missingImages
+          ? `模板已导出；${missingImages} 个未生成或未上传到 COS 的图片链接留空，可稍后重新导出。`
+          : localFolderPath.trim()
           ? `成功导出整合模板！全部 ${products.length} 款商品的 DS列 均已安全替换为本地电脑路径「${localFolderPath}」`
           : `成功导出整合模板！已将全部 ${products.length} 款商品按随机 4 色顺序写入 EA 列，SPU 与 SKU 均已就绪。`,
         'success'
@@ -1584,8 +1573,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
             {/* 操作控制区 */}
             <div className="flex flex-wrap items-center gap-2.5">
-              {/* 谷歌翻译全部按钮 */}
-              {products.length > 0 && (
+              {false && products.length > 0 && (
                 <button
                   type="button"
                   disabled={isTranslatingAll}
@@ -1602,8 +1590,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
 
-              {/* 随机颜色排布顺序控制 */}
-              {products.length > 0 && (
+              {false && products.length > 0 && (
                 <button
                   type="button"
                   onClick={handleShuffleColorOrder}
@@ -1615,7 +1602,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
 
-              {/* 腾讯云 COS 直传状态与密钥配置按钮 */}
+              {false && (
               <button
                 type="button"
                 onClick={openCosConfigModal}
@@ -1636,10 +1623,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     ? `☁️ 腾讯云已连接 (${cosBucket || 'yxig-1500925420'})`
                     : '🔑 配置腾讯云 COS'}
                 </span>
-              </button>
+              </button>)}
 
-              {/* 如果存在尚未同步到腾讯云的图片，提供一键同步按钮 */}
-              {products.some((p) => (p.whiteUrl && !p.whiteUrl.includes('.myqcloud.com')) || (p.blackUrl && !p.blackUrl.includes('.myqcloud.com'))) && (
+              {false && products.some((p) => (p.whiteUrl && !p.whiteUrl.includes('.myqcloud.com')) || (p.blackUrl && !p.blackUrl.includes('.myqcloud.com'))) && (
                 <button
                   type="button"
                   disabled={isUploadingCos}
@@ -1656,8 +1642,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
 
-              {/* 视图切换 */}
-              <div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
+              {false && (<div className="flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200 text-xs">
                 <button
                   type="button"
                   onClick={() => setViewLayout('card')}
@@ -1684,7 +1669,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <List className="w-3.5 h-3.5" />
                   <span>紧凑列表</span>
                 </button>
-              </div>
+              </div>)}
 
               {isProcessing ? (
                 <button
@@ -1718,7 +1703,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <span>{isBatchExporting ? '正在导出整合表格...' : '导出整合上架模板 (.xlsx)'}</span>
               </button>
 
-              <button
+              {false && <button
                 type="button"
                 disabled={products.length === 0 || isZipping}
                 onClick={handleDownloadAllZip}
@@ -1731,7 +1716,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <Package className="w-4 h-4" />
                 )}
                 <span>{isZipping ? '正在打包图片...' : '打包下载全部图片 (ZIP)'}</span>
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -2089,12 +2074,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                         {/* 导出当前单品模板 */}
                         <button
                           type="button"
-                          onClick={() => handleExportSingle(item, idx)}
+                          onClick={() => handleDeleteProduct(item)}
                           className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 cursor-pointer transition-colors"
-                          title="导出此款单品上架模板"
+                          title="删除此商品"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>导出单款</span>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>删除商品</span>
                         </button>
                       </div>
                     </div>
@@ -2300,12 +2285,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                         {/* 导出单品 Excel 模板 */}
                         <button
                           type="button"
-                          onClick={() => handleExportSingle(item, idx)}
+                          onClick={() => handleDeleteProduct(item)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold border border-slate-200 cursor-pointer transition-colors"
-                          title="仅导出当前单品模板"
+                          title="删除此商品"
                         >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>导出单款</span>
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>删除商品</span>
                         </button>
                       </div>
                     </div>
