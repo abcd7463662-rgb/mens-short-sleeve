@@ -4,30 +4,31 @@
  */
 
 import React, { useState, useCallback } from 'react';
-import { Header } from './components/Header';
+import { Header, WorkspaceCategory } from './components/Header';
 import { ImageModifierView } from './features/imageModifier';
 import { ImageModifierView as WomenImageModifierView } from './womens/features/imageModifier';
-import { TemplateGeneratorView } from './womens/features/templateGenerator';
 import { useEffect } from 'react';
 
 export default function App() {
-  const [activeWorkspace, setActiveWorkspace] = useState<'men' | 'women'>(() =>
-    window.location.pathname.startsWith('/women') ? 'women' : 'men'
-  );
+  const categoryFromPath = (): WorkspaceCategory => window.location.pathname.includes('/women/sport')
+    ? 'womens-sport-tee'
+    : window.location.pathname.includes('/women/standard') ? 'womens-standard-tee'
+      : window.location.pathname.startsWith('/women') ? 'womens-plus-tee' : 'men';
+  const [activeWorkspace, setActiveWorkspace] = useState<WorkspaceCategory>(categoryFromPath);
   const [toast, setToast] = useState<{ id: number; message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   useEffect(() => {
     const handlePopState = () => {
-      setActiveWorkspace(window.location.pathname.startsWith('/women') ? 'women' : 'men');
+      setActiveWorkspace(categoryFromPath());
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const switchWorkspace = (women: boolean) => {
-    const nextPath = women ? '/women' : '/';
+  const switchWorkspace = (category: WorkspaceCategory) => {
+    const nextPath = category === 'men' ? '/' : category === 'womens-sport-tee' ? '/women/sport' : category === 'womens-standard-tee' ? '/women/standard' : '/women/plus';
     if (window.location.pathname !== nextPath) window.history.pushState({}, '', nextPath);
-    setActiveWorkspace(women ? 'women' : 'men');
+    setActiveWorkspace(category);
   };
 
   const showToast = useCallback((message: string, type: 'success' | 'info' | 'error' = 'info') => {
@@ -45,15 +46,9 @@ export default function App() {
 
       {/* Main Workspace - 3-Step Simplified Flow */}
       <main className="flex-1 flex items-start justify-center w-full mx-auto">
-        <div className={activeWorkspace === 'women' ? 'block w-full' : 'hidden'}>
+        <div className={activeWorkspace !== 'men' ? 'block w-full' : 'hidden'}>
           <div className="w-full">
-            <WomenImageModifierView onShowToast={showToast} />
-            <div className="mx-auto w-full max-w-7xl px-4 pb-8 sm:px-6">
-              <details className="workspace-panel overflow-hidden">
-                <summary className="cursor-pointer px-5 py-4 text-sm font-semibold text-slate-800">女款规格模板生成器</summary>
-                <TemplateGeneratorView onShowToast={showToast} />
-              </details>
-            </div>
+            <WomenImageModifierView onShowToast={showToast} initialCategory={activeWorkspace === 'womens-sport-tee' ? 'womens-sport-tee' : activeWorkspace === 'womens-standard-tee' ? 'womens-standard-tee' : 'womens-plus-tee'} />
           </div>
         </div>
         <div className={activeWorkspace === 'men' ? 'block w-full' : 'hidden'}>

@@ -8,10 +8,11 @@ export interface SavedTemplateProfile {
   config: SavedTemplateConfig;
   savedAt: string;
   size?: number;
+  category?: WomenProductCategory;
 }
 
-export async function listTemplateProfiles(): Promise<SavedTemplateProfile[]> {
-  const response = await fetch('/api/women/templates', { cache: 'no-store' });
+export async function listTemplateProfiles(category: WomenProductCategory): Promise<SavedTemplateProfile[]> {
+  const response = await fetch(`/api/women/templates?category=${encodeURIComponent(category)}`, { cache: 'no-store' });
   if (!response.ok) throw new Error('读取已保存模板失败');
   return response.json();
 }
@@ -23,36 +24,35 @@ export async function saveTemplateProfile(file: File, profile: SavedTemplateProf
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-  const response = await fetch('/api/women/templates', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ...profile, fileBase64 }),
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error || '保存模板失败');
   const cosResponse = await fetch('/api/women/templates/cos-backup', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: profile.id, fileBase64, profile }),
+    body: JSON.stringify({ id: profile.id, category: profile.category, fileBase64, profile }),
   });
   const cosResult = await cosResponse.json().catch(() => ({}));
-  if (!cosResponse.ok) throw new Error(cosResult.error || '模板已保存到系统，但腾讯云永久备份失败');
+  if (!cosResponse.ok) throw new Error(cosResult.error || '腾讯云永久备份失败');
+  const response = await fetch('/api/women/templates', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...profile, category: profile.category, fileBase64 }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || '腾讯云已保存，但更新运行缓存失败');
 }
 
 export async function loadTemplateProfileFile(profile: SavedTemplateProfile): Promise<File> {
-  const response = await fetch(`/api/women/templates/${encodeURIComponent(profile.id)}/file`, { cache: 'no-store' });
+  const response = await fetch(`/api/women/templates/${encodeURIComponent(profile.id)}/file?category=${encodeURIComponent(profile.category || 'womens-plus-tee')}`, { cache: 'no-store' });
   if (!response.ok) throw new Error('读取已保存模板文件失败');
   return new File([await response.blob()], profile.filename || 'template.xlsx', { type: TEMPLATE_TYPE });
 }
 
-export async function deleteTemplateProfile(id: string): Promise<void> {
-  const response = await fetch(`/api/women/templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export async function deleteTemplateProfile(id: string, category: WomenProductCategory): Promise<void> {
+  const response = await fetch(`/api/women/templates/${encodeURIComponent(id)}?category=${encodeURIComponent(category)}`, { method: 'DELETE' });
   if (!response.ok) throw new Error('删除已保存模板失败');
 }
 
 export const WOMEN_PRODUCT_CATEGORIES = [
   { id: 'womens-plus-tee', label: '女士短袖 · 大码', configured: true },
   { id: 'womens-standard-tee', label: '女士短袖 · 标码', configured: false },
-  { id: 'mens-hoodie', label: '男士卫衣', configured: false },
-  { id: 'womens-hoodie', label: '女士卫衣', configured: false },
+  { id: 'womens-sport-tee', label: '女士运动短袖', configured: false },
 ] as const;
 
 export type WomenProductCategory = (typeof WOMEN_PRODUCT_CATEGORIES)[number]['id'];

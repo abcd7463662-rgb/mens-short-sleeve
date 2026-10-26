@@ -476,7 +476,7 @@ async function startServer() {
     } catch { return []; }
   };
   const LEGACY_WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
-  const WOMEN_TEMPLATE_CATEGORIES = ['womens-plus-tee', 'womens-standard-tee', 'mens-hoodie', 'womens-hoodie'] as const;
+  const WOMEN_TEMPLATE_CATEGORIES = ['womens-plus-tee', 'womens-standard-tee', 'womens-sport-tee'] as const;
   const getWomenTemplatePaths = (category: string) => {
     const dir = path.join(WOMEN_TEMPLATE_DIR, category);
     const categoryPaths = { dir, file: path.join(dir, 'template.xlsx'), meta: path.join(dir, 'meta.json') };
@@ -490,36 +490,72 @@ async function startServer() {
     typeof value === 'string' && WOMEN_TEMPLATE_CATEGORIES.includes(value as (typeof WOMEN_TEMPLATE_CATEGORIES)[number])
       ? value
       : null;
+  const womenCosSettings = () => ({
+    secretId: process.env.TENCENT_COS_SECRET_ID || '',
+    secretKey: process.env.TENCENT_COS_SECRET_KEY || '',
+    bucket: String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim(),
+    region: String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim(),
+  });
+  const readWomenCosIndex = async (category: string): Promise<any[]> => {
+    const settings = womenCosSettings();
+    if (!settings.secretId || !settings.secretKey || !settings.bucket) return [];
+    const COS = (await import('cos-nodejs-sdk-v5')).default;
+    const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+    return new Promise((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json' }, (err: any, data: any) => {
+      if (err || !data?.Body) { resolve([]); return; }
+      try { resolve(JSON.parse(Buffer.isBuffer(data.Body) ? data.Body.toString('utf8') : String(data.Body))); } catch { resolve([]); }
+    }));
+  };
 
   /** 将自定义模板及其识别配置永久备份到腾讯云 COS。 */
   app.post('/api/women/templates/cos-backup', async (req, res) => {
     try {
-      const secretId = process.env.TENCENT_COS_SECRET_ID;
-      const secretKey = process.env.TENCENT_COS_SECRET_KEY;
-      const bucket = String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
-      const region = String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim();
+      const { secretId, secretKey, bucket, region } = womenCosSettings();
       if (!secretId || !secretKey || !bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置' }); return; }
       const { id, fileBase64, profile } = req.body || {};
+      const category = resolveWomenCategory(req.body?.category || profile?.category);
+      if (!category) { res.status(400).json({ error: '无效的模板类目' }); return; }
       if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '模板档案数据无效' }); return; }
       const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
       if (!buffer.length) { res.status(400).json({ error: '模板文件为空' }); return; }
       const COS = (await import('cos-nodejs-sdk-v5')).default;
       const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
       const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: bucket, Region: region, Key, Body, ContentType }, (err: any) => err ? reject(err) : resolve()));
-      const prefix = 'templates/custom/' + id;
+      const prefix = 'templates/custom/' + category + '/' + id;
       await put(prefix + '/template.xlsx', buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       await put(prefix + '/profile.json', Buffer.from(JSON.stringify(profile || {}, null, 2), 'utf8'), 'application/json; charset=utf-8');
+      const existing = await readWomenCosIndex(category);
+      const next = [...existing.filter((item) => item.id !== id), { ...profile, id, category, size: buffer.length, savedAt: new Date().toISOString() }];
+      await put('templates/custom/' + category + '/index.json', Buffer.from(JSON.stringify(next, null, 2), 'utf8'), 'application/json; charset=utf-8');
       res.json({ success: true, permanent: true, bucket, region, prefix, templateUrl: 'https://' + bucket + '.cos.' + region + '.myqcloud.com/' + prefix + '/template.xlsx' });
     } catch (err: any) { res.status(500).json({ error: err.message || '腾讯云模板备份失败' }); }
   });
 
-  app.get('/api/women/templates', async (_req, res) => {
-    res.json(await restoreWomenProfiles());
+  app.get('/api/women/templates', async (req, res) => {
+    const category = resolveWomenCategory(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的模板类目' }); return; }
+    const cosProfiles = await readWomenCosIndex(category);
+    const localProfiles = (await restoreWomenProfiles()).filter((profile) => (profile.category || 'womens-plus-tee') === category);
+    const byId = new Map([...localProfiles, ...cosProfiles].map((profile) => [profile.id, profile]));
+    res.json([...byId.values()]);
   });
 
   app.get('/api/women/templates/:id/file', async (req, res) => {
     const id = String(req.params.id || '');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) { res.status(400).json({ error: '模板编号无效' }); return; }
+    const profiles = await restoreWomenProfiles();
+    const category = resolveWomenCategory(req.query.category) || resolveWomenCategory(profiles.find((item) => item.id === id)?.category);
+    if (category) {
+      try {
+        const settings = womenCosSettings();
+        if (settings.secretId && settings.secretKey && settings.bucket) {
+          const COS = (await import('cos-nodejs-sdk-v5')).default;
+          const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+          const body = await new Promise<Buffer | null>((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/' + id + '/template.xlsx' }, (err: any, data: any) => resolve(err || !data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body))));
+          if (body) { res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Cache-Control', 'no-store'); res.send(body); return; }
+        }
+      } catch (error) { console.warn('COS template read fallback:', error); }
+    }
     let file = getWomenProfileFile(id);
     if (!fs.existsSync(file)) {
       try {
@@ -528,7 +564,7 @@ async function startServer() {
       } catch { /* 返回未找到 */ }
     }
     if (!fs.existsSync(file)) { res.status(404).json({ error: '找不到已保存模板文件' }); return; }
-    const profile = (await restoreWomenProfiles()).find((item) => item.id === id);
+    const profile = profiles.find((item) => item.id === id);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(profile?.filename || 'template.xlsx')}"`);
     res.setHeader('Cache-Control', 'no-store');
@@ -537,8 +573,9 @@ async function startServer() {
 
   app.post('/api/women/templates', async (req, res) => {
     try {
-      if (!githubCanWrite()) { res.status(503).json({ error: '服务端未配置 GitHub 持久化权限，无法永久保存模板。请配置 GITHUB_TOKEN 后重试。' }); return; }
       const { id, name, filename, fileBase64, config } = req.body || {};
+      const category = resolveWomenCategory(req.body?.category);
+      if (!category) { res.status(400).json({ error: '无效的模板类目' }); return; }
       if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id) || typeof name !== 'string' || !name.trim()) { res.status(400).json({ error: '请提供有效的模板名称' }); return; }
       if (typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '请选择模板文件' }); return; }
       const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
@@ -547,10 +584,8 @@ async function startServer() {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, buffer);
       const profiles = await restoreWomenProfiles();
-      const profile = { id, name: name.trim().slice(0, 100), filename: path.basename(String(filename || 'template.xlsx')), config, savedAt: new Date().toISOString(), size: buffer.length };
+      const profile = { id, category, name: name.trim().slice(0, 100), filename: path.basename(String(filename || 'template.xlsx')), config, savedAt: new Date().toISOString(), size: buffer.length };
       const next = [...profiles.filter((item) => item.id !== id), profile];
-      await ensureStoreBranch();
-      await writeGithubFile(getWomenProfileBranchPath(id), buffer.toString('base64'), `chore: save women template (${profile.name})`);
       await writeWomenProfiles(next);
       res.json({ success: true, permanent: true, profile });
     } catch (err: any) { res.status(500).json({ error: err.message || '保存模板失败' }); }
@@ -560,8 +595,21 @@ async function startServer() {
     const id = String(req.params.id || '');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) { res.status(400).json({ error: '模板编号无效' }); return; }
     try {
-      if (!githubCanWrite()) { res.status(503).json({ error: '服务端未配置 GitHub 持久化权限，无法永久保存模板。' }); return; }
-      await deleteGithubFile(getWomenProfileBranchPath(id), 'chore: delete saved women template');
+      const profiles = await restoreWomenProfiles();
+      const profile = profiles.find((item) => item.id === id);
+      const category = resolveWomenCategory(req.query.category || profile?.category);
+      if (category) {
+        const settings = womenCosSettings();
+        if (settings.secretId && settings.secretKey && settings.bucket) {
+          const COS = (await import('cos-nodejs-sdk-v5')).default;
+          const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+          const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any) => err ? reject(err) : resolve()));
+          await remove('templates/custom/' + category + '/' + id + '/template.xlsx');
+          await remove('templates/custom/' + category + '/' + id + '/profile.json');
+          const index = (await readWomenCosIndex(category)).filter((item) => item.id !== id);
+          await new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json', Body: Buffer.from(JSON.stringify(index, null, 2)), ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
+        }
+      }
       const file = getWomenProfileFile(id);
       if (fs.existsSync(file)) fs.unlinkSync(file);
       const nextProfiles = (await restoreWomenProfiles()).filter((item) => item.id !== id);

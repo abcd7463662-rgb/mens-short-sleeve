@@ -60,6 +60,8 @@ import {
   SavedTemplateField,
 } from '../templateGenerator';
 import { generate018SpuCode } from '../templateGenerator/rules';
+import { buildMultiProductTemplateRules as buildSportTemplateRules } from '../templateGenerator/sportRules';
+import { executeTemplateGeneration } from '../templateGenerator';
 import { inspectTemplateFile } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
@@ -166,6 +168,7 @@ const getRandomColorOrder = (): ColorKey[] => {
 
 interface ImageModifierViewProps {
   onShowToast: (msg: string, type?: 'success' | 'info' | 'error') => void;
+  initialCategory?: WomenProductCategory;
 }
 
 interface PreviewModalData {
@@ -181,14 +184,16 @@ interface PreviewModalData {
   spuCode?: string;
 }
 
-export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToast }) => {
+export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToast, initialCategory }) => {
   const [productCategory, setProductCategory] = useState<WomenProductCategory>(() => {
     const stored = localStorage.getItem('WOMEN_PRODUCT_CATEGORY');
+    if (initialCategory) return initialCategory;
     return WOMEN_PRODUCT_CATEGORIES.some((category) => category.id === stored)
       ? (stored as WomenProductCategory)
-      : 'womens-plus-tee';
+      : initialCategory || 'womens-plus-tee';
   });
   const activeCategory = WOMEN_PRODUCT_CATEGORIES.find((category) => category.id === productCategory)!;
+  const [selectedStore, setSelectedStore] = useState<'Y店' | 'H店'>(initialCategory === 'womens-sport-tee' ? 'Y店' : 'H店');
   const [templateProfiles, setTemplateProfiles] = useState<SavedTemplateProfile[]>([]);
   const [activeProfileId, setActiveProfileId] = useState('');
   const [profileMode, setProfileMode] = useState(false);
@@ -212,7 +217,18 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [loadedTemplateCategory, setLoadedTemplateCategory] = useState<WomenProductCategory | null>(null);
-  useEffect(() => { listTemplateProfiles().then(setTemplateProfiles).catch((error) => console.warn(error)); }, []);
+  useEffect(() => { listTemplateProfiles(productCategory).then(setTemplateProfiles).catch((error) => console.warn(error)); }, [productCategory]);
+
+  useEffect(() => {
+    if (initialCategory && initialCategory !== productCategory) {
+      setProfileMode(false);
+      setActiveProfileId('');
+      setTemplateFile(null);
+      setLoadedTemplateCategory(null);
+      setProductCategory(initialCategory);
+      setSelectedStore(initialCategory === 'womens-sport-tee' ? 'Y店' : 'H店');
+    }
+  }, [initialCategory, productCategory]);
 
   useEffect(() => {
     if (profileMode) return;
@@ -685,8 +701,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         const row = Number(match.cell.match(/\d+$/)?.[0] || profileConfig.startRow);
         return { ...field, column: match.cell.replace(/\d+$/, ''), rowOffset: Math.max(0, row - profileConfig.startRow) };
       }) };
-      const profile: SavedTemplateProfile = { id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, name, filename: file.name, config, savedAt: new Date().toISOString() };
-      setTemplateProfiles((prev) => [...prev, profile]);
+      const profile: SavedTemplateProfile = { id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, category: productCategory, name, filename: file.name, config, savedAt: new Date().toISOString() };
+      setTemplateProfiles((prev) => [...prev.filter((item) => item.id !== profile.id), profile]);
       setActiveProfileId(profile.id);
       setProfileMode(true);
       setProfileName(name);
@@ -723,7 +739,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     const name = profileName.trim();
     if (!name) { onShowToast('请填写模板名称', 'error'); return; }
     const config = { ...profileConfig, name };
-    const profile: SavedTemplateProfile = { id: activeProfileId, name, filename: templateFile.name, config, savedAt: new Date().toISOString() };
+    const profile: SavedTemplateProfile = { id: activeProfileId, category: productCategory, name, filename: templateFile.name, config, savedAt: new Date().toISOString() };
     try {
       await saveTemplateProfile(templateFile, profile);
       setProfileConfig(config);
@@ -752,7 +768,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const handleDeleteProfile = async () => {
     if (!activeProfileId || !window.confirm(`确定永久删除模板「${profileName}」吗？`)) return;
     try {
-      await deleteTemplateProfile(activeProfileId);
+      await deleteTemplateProfile(activeProfileId, productCategory);
       setTemplateProfiles((prev) => prev.filter((profile) => profile.id !== activeProfileId));
       setActiveProfileId('');
       setProfileMode(false);
@@ -778,14 +794,44 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   };
 
   // --- 3. 模板导出与 6 并发四色生图 (gpt-image-2.5 + 自动 1340*1785 白色背景填充) ---
-  const startProcessing = () => {
+  const startProcessing = async () => {
     if (products.length === 0) {
       onShowToast('请先导入商品信息表格', 'error');
       return;
     }
+    try {
+      const response = await fetch(`/api/cos/store-links/read?storeName=${encodeURIComponent(selectedStore)}`);
+      if (response.ok) {
+        const data = await response.json();
+        const known = new Set((Array.isArray(data.urls) ? data.urls : []).map((url: string) => normalizeSourceUrl(url)));
+        const duplicates = products.filter((product) => known.has(normalizeSourceUrl(product.imageUrl)));
+        const unique = products.filter((product) => !known.has(normalizeSourceUrl(product.imageUrl)));
+        if (duplicates.length) {
+          setProducts(unique);
+          productsRef.current = unique;
+          if (!unique.length) { onShowToast(`${selectedStore}历史库已收录这 ${duplicates.length} 款商品，已跳过重复生图。`, 'info'); return; }
+          onShowToast(`已跳过 ${duplicates.length} 款 ${selectedStore}历史重复商品，继续处理 ${unique.length} 款。`, 'info');
+        }
+      }
+    } catch (error) { console.warn('H店重复检查失败，继续处理商品:', error); }
     processingRef.current = true;
     setIsProcessing(true);
     scheduleNextTasks();
+  };
+
+  const normalizeSourceUrl = (url: string) => {
+    try { const parsed = new URL(url); return (parsed.hostname + parsed.pathname).toLowerCase().replace(/\/$/, ''); }
+    catch { return String(url || '').split('?')[0].trim().toLowerCase(); }
+  };
+
+  const saveSourceUrlsToHStore = async (items: ProductItem[]) => {
+    const urls = [...new Set(items.map((item) => item.imageUrl).filter((url) => /^https?:\/\//i.test(url)))];
+    if (!urls.length) return;
+    try {
+      const response = await fetch('/api/cos/store-links/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ storeName: selectedStore, urls }) });
+      const result = await response.json();
+      if (!response.ok || result.success === false) console.warn('H店原图链接保存失败:', result.error);
+    } catch (error) { console.warn('H店原图链接保存失败:', error); }
   };
 
   const stopProcessing = () => {
@@ -1076,7 +1122,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出单个商品的 Excel 模板 (C6填中文标题，D6填谷歌翻译英文标题，双色黑白)
   const handleExportSingle = async (p: ProductItem, index: number) => {
-    if (!activeCategory.configured && !activeProfileId) {
+    if (!activeCategory.configured && !activeProfileId && !(productCategory === 'womens-sport-tee' && templateFile)) {
       onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
       return;
     }
@@ -1123,9 +1169,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const customFilename = `${(cleanedTitle || `商品_${index + 1}`).replace(/[/\\?%*:|"<>]/g, '_')}_上架模板.xlsx`;
       const res = activeProfileId && templateFile
         ? await generateMappedTemplateFile({ file: templateFile, config: { ...profileConfig, name: profileName || profileConfig.name }, products: [singleProduct], filename: customFilename })
+        : productCategory === 'womens-sport-tee' && templateFile
+          ? await executeTemplateGeneration(templateFile, profileConfig.targetSheetIndex, buildSportTemplateRules([singleProduct]))
         : await generateMultiProductTemplateFile({ products: [singleProduct], baseTemplateFile: templateFile || undefined, customFilename });
 
       downloadTemplateFile(res.outputBlob, res.fileName);
+      void saveSourceUrlsToHStore([p]);
       onShowToast(
         localFolderPath.trim()
           ? `成功导出「${cleanedTitle}」标准上架模板（已自动将DS列替换为本地链接：${localFolderPath}）！`
@@ -1146,7 +1195,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
   const handleExportCombined = async () => {
-    if (!activeCategory.configured && !activeProfileId) {
+    if (!activeCategory.configured && !activeProfileId && !(productCategory === 'womens-sport-tee' && templateFile)) {
       onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
       return;
     }
@@ -1204,6 +1253,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         return {
           title: cTitle,
           englishTitle: eTitle,
+          spuCode: p.spuCode,
           whiteImageUrl: whiteImg,
           blackImageUrl: blackImg,
           apricotImageUrl: apricotImg,
@@ -1218,9 +1268,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
       const res = activeProfileId && templateFile
         ? await generateMappedTemplateFile({ file: templateFile, config: { ...profileConfig, name: profileName || profileConfig.name }, products: inputs, filename: exportName })
+        : productCategory === 'womens-sport-tee' && templateFile
+          ? await executeTemplateGeneration(templateFile, profileConfig.targetSheetIndex, buildSportTemplateRules(inputs))
         : await generateMultiProductTemplateFile({ products: inputs, baseTemplateFile: templateFile || undefined, customFilename: exportName });
 
       downloadTemplateFile(res.outputBlob, res.fileName);
+      void saveSourceUrlsToHStore(currentProducts);
       const missingImages = currentProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !url.includes('.myqcloud.com'))).length, 0);
       onShowToast(
         missingImages
@@ -1509,9 +1562,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       {/* 极简主三步工作流 */}
       <div className="space-y-5">
         <div className="border-b border-blue-100 pb-4">
-          <h1 className="text-lg font-semibold text-slate-900">女士短袖 · 商品上架</h1>
+          <h1 className="text-lg font-semibold text-slate-900">{activeCategory.label} · 商品上架</h1>
                   <p className="mt-0.5 text-xs text-slate-500">选择类目，导入商品和对应模板，再生成图片并导出</p>
-          <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="选择商品类目">
+          <div className="mt-3 flex items-center gap-2">
+            <span className="text-xs text-slate-500">原图去重库</span>
+            {(productCategory === 'womens-sport-tee' ? ['Y店', 'H店'] as const : ['H店'] as const).map((store) => <button key={store} type="button" aria-pressed={selectedStore === store} onClick={() => setSelectedStore(store)} className={`rounded border px-2.5 py-1 text-xs font-medium ${selectedStore === store ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-600'}`}>{store}</button>)}
+          </div>
+          {!initialCategory && <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="选择商品类目">
             {WOMEN_PRODUCT_CATEGORIES.map((category) => (
               <button
                 key={category.id}
@@ -1528,7 +1585,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 {category.label}
               </button>
             ))}
-          </div>
+          </div>}
         </div>
         {/* 步骤 1 & 2 并排核心卡片 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

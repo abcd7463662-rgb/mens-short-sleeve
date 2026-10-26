@@ -1,9 +1,11 @@
 import React from 'react';
 import { Shirt, Table2 } from 'lucide-react';
 
+export type WorkspaceCategory = 'men' | 'womens-plus-tee' | 'womens-standard-tee' | 'womens-sport-tee';
+
 interface HeaderProps {
-  activeWorkspace: 'men' | 'women';
-  onWorkspaceChange: (women: boolean) => void;
+  activeWorkspace: WorkspaceCategory;
+  onWorkspaceChange: (category: WorkspaceCategory) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ activeWorkspace, onWorkspaceChange }) => {
@@ -19,12 +21,18 @@ export const Header: React.FC<HeaderProps> = ({ activeWorkspace, onWorkspaceChan
             <div className="text-[11px] text-slate-500">商品处理与上架文件</div>
           </div>
         </div>
-        <nav className="inline-flex shrink-0 items-center gap-1 rounded-md border border-blue-100 bg-blue-50 p-1" aria-label="商品类型">
-          <button type="button" onClick={() => onWorkspaceChange(false)} aria-pressed={activeWorkspace === 'men'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'men' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
+        <nav className="flex max-w-full flex-wrap items-center gap-1 rounded-md border border-blue-100 bg-blue-50 p-1" aria-label="商品类型">
+          <button type="button" onClick={() => onWorkspaceChange('men')} aria-pressed={activeWorkspace === 'men'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'men' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
             <Shirt className="h-3.5 w-3.5" /> 男士短袖
           </button>
-          <button type="button" onClick={() => onWorkspaceChange(true)} aria-pressed={activeWorkspace === 'women'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'women' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
-            <Shirt className="h-3.5 w-3.5" /> 女士短袖
+          <button type="button" onClick={() => onWorkspaceChange('womens-plus-tee')} aria-pressed={activeWorkspace === 'womens-plus-tee'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'womens-plus-tee' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
+            <Shirt className="h-3.5 w-3.5" /> 女士大码
+          </button>
+          <button type="button" onClick={() => onWorkspaceChange('womens-standard-tee')} aria-pressed={activeWorkspace === 'womens-standard-tee'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'womens-standard-tee' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
+            <Shirt className="h-3.5 w-3.5" /> 女士标码
+          </button>
+          <button type="button" onClick={() => onWorkspaceChange('womens-sport-tee')} aria-pressed={activeWorkspace === 'womens-sport-tee'} className={`inline-flex min-h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors ${activeWorkspace === 'womens-sport-tee' ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-600 hover:bg-white hover:text-blue-700'}`}>
+            <Shirt className="h-3.5 w-3.5" /> 女士运动
           </button>
         </nav>
       </div>
