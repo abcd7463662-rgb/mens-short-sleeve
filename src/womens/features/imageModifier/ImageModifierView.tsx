@@ -59,7 +59,7 @@ import {
 import { generate018SpuCode } from '../templateGenerator/rules';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
-import { deleteTemplateFile, loadTemplateFile, saveTemplateFile } from '../../utils/templateStorage';
+import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
 export interface ProductItem {
   id: string;
@@ -85,11 +85,39 @@ export interface ProductItem {
   blackError?: string;
   apricotError?: string;
   greenError?: string;
+  cosUploadErrors?: Partial<Record<'white' | 'black' | 'apricot' | 'green', string>>;
   errorMsg?: string;
   file?: File;
   firstColor?: ColorKey;
   colorOrder?: ColorKey[]; // 2色先后排布顺序：白色、黑色
   spuCode?: string;
+}
+
+const COS_UPLOAD_MAX_ATTEMPTS = 3;
+
+async function uploadImageToCos(payload: Record<string, unknown>): Promise<{ success: true; url: string }> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= COS_UPLOAD_MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await fetch('/api/cos/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (response.ok && result.success && result.url) return result;
+      throw new Error(result.error || `HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt < COS_UPLOAD_MAX_ATTEMPTS) {
+        console.warn(`COS upload attempt ${attempt}/${COS_UPLOAD_MAX_ATTEMPTS} failed; retrying:`, lastError.message);
+        await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+      }
+    }
+  }
+
+  throw new Error(`连续尝试 ${COS_UPLOAD_MAX_ATTEMPTS} 次仍失败：${lastError?.message || '未知错误'}`);
 }
 
 export const COLOR_CONFIG: {
@@ -150,6 +178,13 @@ interface PreviewModalData {
 }
 
 export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToast }) => {
+  const [productCategory, setProductCategory] = useState<WomenProductCategory>(() => {
+    const stored = localStorage.getItem('WOMEN_PRODUCT_CATEGORY');
+    return WOMEN_PRODUCT_CATEGORIES.some((category) => category.id === stored)
+      ? (stored as WomenProductCategory)
+      : 'womens-plus-tee';
+  });
+  const activeCategory = WOMEN_PRODUCT_CATEGORIES.find((category) => category.id === productCategory)!;
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [tableFile, setTableFile] = useState<File | null>(null);
@@ -158,14 +193,24 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [loadedTemplateCategory, setLoadedTemplateCategory] = useState<WomenProductCategory | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    loadTemplateFile().then((file) => {
-      if (!cancelled && file) setTemplateFile(file);
+    setTemplateFile(null);
+    setLoadedTemplateCategory(null);
+    loadTemplateFile(productCategory).then((file) => {
+      if (!cancelled) {
+        setTemplateFile(file);
+        setLoadedTemplateCategory(file ? productCategory : null);
+      }
     });
     return () => { cancelled = true; };
-  }, []);
+  }, [productCategory]);
+
+  useEffect(() => {
+    localStorage.setItem('WOMEN_PRODUCT_CATEGORY', productCategory);
+  }, [productCategory]);
 
   // 3. 处理与导出状态 (支持最高 12 并发)
   const CONCURRENCY = 12;
@@ -597,14 +642,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       return;
     }
     setTemplateFile(file);
-    void saveTemplateFile(file);
+    setLoadedTemplateCategory(productCategory);
+    void saveTemplateFile(file, productCategory);
     onShowToast(`已载入自定义模板文件：「${file.name}」`, 'success');
     if (templateInputRef.current) templateInputRef.current.value = '';
   };
 
   const handleResetTemplate = () => {
     setTemplateFile(null);
-    void deleteTemplateFile();
+    setLoadedTemplateCategory(null);
+    void deleteTemplateFile(productCategory);
     onShowToast('已重置为系统内置标准模板', 'info');
   };
 
@@ -667,8 +714,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   const executeSingleColorTask = async (
     productId: string,
-    color: ColorKey,
-    retry = 0
+    color: ColorKey
   ) => {
     const product = productsRef.current.find((p) => p.id === productId);
     if (!product) return;
@@ -709,6 +755,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       const result = await executeAsyncImageWorkflow(params, () => {});
       let finalImageUrl = result.imageUrl;
+      let cosUploadError = '';
 
       // 核心需求：自动通过纯白背景填充至 1340*1785 (3:4 标准电商主图规格)
       let paddedSuccess = false;
@@ -741,26 +788,18 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         if (currentBucket) {
           try {
             const cosFilename = getDownloadedFilename(product.title, color, product.spuCode);
-            const cosRes = await fetch('/api/cos/upload', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
+            const cosJson = await uploadImageToCos({
                 imageBase64: padded.dataUri,
                 filename: cosFilename,
                 bucket: currentBucket,
                 region: currentRegion,
-              }),
             });
-            const cosJson = await cosRes.json();
-            if (cosJson.success && cosJson.url) {
-              finalImageUrl = cosJson.url;
-              console.log(`[Tencent COS Auto-Upload] Success for ${cosFilename}: ${cosJson.url}`);
-            } else {
-              console.warn('[Tencent COS Auto-Upload failed]:', cosJson.error);
-              onShowToast('⚠️ 服务端尚未配置腾讯云 COS，图片未能直传。请联系管理员配置环境变量。', 'error');
-            }
+            finalImageUrl = cosJson.url;
+            console.log(`[Tencent COS Auto-Upload] Success for ${cosFilename}: ${cosJson.url}`);
           } catch (cosErr) {
-            console.warn('[Tencent COS Auto-Upload failed, fallback to hosted URL]:', cosErr);
+            console.error('[Tencent COS Auto-Upload failed after retries]:', cosErr);
+            cosUploadError = cosErr instanceof Error ? cosErr.message : String(cosErr);
+            onShowToast(`图片已生成，但 COS 上传请求失败：${cosUploadError}`, 'error');
           }
         }
       } catch (padErr) {
@@ -777,6 +816,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             [urlKey]: finalImageUrl,
             [paddedKey]: paddedSuccess,
             [errorKey]: undefined,
+            cosUploadErrors: cosUploadError
+              ? { ...p.cosUploadErrors, [color]: cosUploadError }
+              : Object.fromEntries(Object.entries(p.cosUploadErrors || {}).filter(([key]) => key !== color)),
           };
           const allColorsDone =
             (color === 'white' ? 'success' : updated.whiteStatus) === 'success' &&
@@ -788,15 +830,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         })
       );
     } catch (err: any) {
-      if (retry < 2 && processingRef.current) {
-        // Auto retry up to 3 times
-        await new Promise((r) => setTimeout(r, 1500));
-        if (processingRef.current) {
-          executeSingleColorTask(productId, color, retry + 1);
-          return;
-        }
-      }
-
       setProducts((prev) =>
         prev.map((p) =>
           p.id === productId
@@ -821,7 +854,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 单独重试某款商品的某颜色
   const handleRetrySingleColor = (productId: string, color: ColorKey) => {
-    executeSingleColorTask(productId, color, 0);
+    executeSingleColorTask(productId, color);
   };
 
   // 手动对某张图片执行白色背景填充至 1340*1785 并更新为 1340*1785 直链
@@ -850,6 +883,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const padRes = await padImageTo1340x1785(sourceUrl, 1.0);
 
       let finalUrl = padRes.dataUri;
+      let cosUploadError = '';
+      let cosUploadSucceeded = false;
       try {
         const safeTitle = (product.title || 'product').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_');
         const hostedRes = await saveHostedImage(
@@ -869,22 +904,17 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       if (currentBucket) {
         try {
           const cosFilename = getDownloadedFilename(product.title, targetType as any, product.spuCode);
-          const cosRes = await fetch('/api/cos/upload', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+          const cosJson = await uploadImageToCos({
               imageBase64: padRes.dataUri,
               filename: cosFilename,
               bucket: currentBucket,
               region: currentRegion,
-            }),
           });
-          const cosJson = await cosRes.json();
-          if (cosJson.success && cosJson.url) {
-            finalUrl = cosJson.url;
-          }
+          finalUrl = cosJson.url;
+          cosUploadSucceeded = true;
         } catch (cosErr) {
-          console.warn('Manual pad COS upload skipped:', cosErr);
+          console.error('Manual pad COS upload failed:', cosErr);
+          cosUploadError = cosErr instanceof Error ? cosErr.message : String(cosErr);
         }
       }
 
@@ -909,7 +939,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         return { ...prev, originalUrl: finalUrl };
       });
 
-      onShowToast('已成功通过纯白填充将图片统一调整为 1340*1785！', 'success');
+      onShowToast(
+        cosUploadError
+          ? `白底处理完成，但 COS 上传失败：${cosUploadError}。请用“同步全部图片”重试。`
+          : cosUploadSucceeded
+            ? '已完成白底处理和 COS 上传，图片规格为 1340*1785。'
+            : '已完成白底处理，图片规格为 1340*1785。',
+        cosUploadError ? 'error' : 'success'
+      );
     } catch (err: any) {
       onShowToast(err.message || '图片填充处理失败', 'error');
     }
@@ -917,6 +954,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出单个商品的 Excel 模板 (C6填中文标题，D6填谷歌翻译英文标题，双色黑白)
   const handleExportSingle = async (p: ProductItem, index: number) => {
+    if (!activeCategory.configured) {
+      onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
+      return;
+    }
     if (localPathFormat === 'publicUrl' && (!p.whiteUrl || !p.blackUrl)) {
       onShowToast('⚠️ 该商品的四色主图尚未生成，请先在下方点击生成，成功后即可自动导出公网直链！', 'error');
       return;
@@ -930,14 +971,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       let blackImg = p.blackUrl || '';
 
       if (cosBucket.trim()) {
-        const fnWhite = getDownloadedFilename(p.title, 'white', p.spuCode);
-        whiteImg = p.whiteUrl?.includes('.myqcloud.com')
-          ? p.whiteUrl
-          : `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(fnWhite)}`;
-        const fnBlack = getDownloadedFilename(p.title, 'black', p.spuCode);
-        blackImg = p.blackUrl?.includes('.myqcloud.com')
-          ? p.blackUrl
-          : `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(fnBlack)}`;
+        const missingCos = [
+          !p.whiteUrl?.includes('.myqcloud.com') ? '白色' : '',
+          !p.blackUrl?.includes('.myqcloud.com') ? '黑色' : '',
+        ].filter(Boolean);
+        if (missingCos.length) {
+          onShowToast(`${missingCos.join('、')}图片尚未确认上传到 COS。请先点击“同步全部图片至腾讯云 COS”再导出。`, 'error');
+          return;
+        }
       } else if (customCdnPrefix.trim()) {
         let cleanPrefix = customCdnPrefix.trim();
         if (cleanPrefix.endsWith('/')) cleanPrefix = cleanPrefix.slice(0, -1);
@@ -982,6 +1023,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
   const handleExportCombined = async () => {
+    if (!activeCategory.configured) {
+      onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
+      return;
+    }
     if (products.length === 0) {
       onShowToast('请先在第 1 步导入商品信息', 'error');
       return;
@@ -1022,14 +1067,15 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         let blackImg = p.blackUrl || '';
 
         if (cosBucket.trim()) {
-          const fnWhite = getDownloadedFilename(p.title, 'white', p.spuCode);
-          whiteImg = p.whiteUrl?.includes('.myqcloud.com')
-            ? p.whiteUrl
-            : `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(fnWhite)}`;
-          const fnBlack = getDownloadedFilename(p.title, 'black', p.spuCode);
-          blackImg = p.blackUrl?.includes('.myqcloud.com')
-            ? p.blackUrl
-            : `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(fnBlack)}`;
+          const missingCos = [
+            !p.whiteUrl?.includes('.myqcloud.com') ? '白色' : '',
+            !p.blackUrl?.includes('.myqcloud.com') ? '黑色' : '',
+            p.apricotUrl && !p.apricotUrl.includes('.myqcloud.com') ? '杏色' : '',
+            p.greenUrl && !p.greenUrl.includes('.myqcloud.com') ? '绿色' : '',
+          ].filter(Boolean);
+          if (missingCos.length) {
+            throw new Error(`商品「${p.title}」的${missingCos.join('、')}图片尚未确认上传到 COS，请先点击“同步全部图片至腾讯云 COS”再导出。`);
+          }
         } else if (customCdnPrefix.trim()) {
           let cleanPrefix = customCdnPrefix.trim();
           if (cleanPrefix.endsWith('/')) cleanPrefix = cleanPrefix.slice(0, -1);
@@ -1045,21 +1091,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           blackImg = getLocalFilePath(localFolderPath, fnBlack, localPathFormat);
         }
 
-        const apricotImg = cosBucket.trim()
-          ? (p.apricotUrl?.includes('.myqcloud.com')
-              ? p.apricotUrl
-              : (p.apricotUrl
-                  ? `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(getDownloadedFilename(p.title, 'apricot' as any, p.spuCode))}`
-                  : ''))
-          : (p.apricotUrl || '');
-
-        const greenImg = cosBucket.trim()
-          ? (p.greenUrl?.includes('.myqcloud.com')
-              ? p.greenUrl
-              : (p.greenUrl
-                  ? `https://${cosBucket.trim()}.cos.${cosRegion}.myqcloud.com/${encodeURIComponent(getDownloadedFilename(p.title, 'green' as any, p.spuCode))}`
-                  : ''))
-          : (p.greenUrl || '');
+        const apricotImg = p.apricotUrl || '';
+        const greenImg = p.greenUrl || '';
 
         return {
           title: cTitle,
@@ -1255,31 +1288,25 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           console.warn('Client base64 conversion fallback to server resolution:', bErr);
         }
 
-        const uploadRes = await fetch('/api/cos/upload', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        const resJson = await uploadImageToCos({
             imageBase64: clientBase64,
             imageUrl: task.imageUrl,
             filename: task.filename,
             bucket: targetBucket,
             region: cosRegion,
-          }),
         });
-
-        const resJson = await uploadRes.json();
-        if (!uploadRes.ok || !resJson.success) {
-          throw new Error(resJson.error || `上传图片 ${task.filename} 失败`);
-        }
 
         const cosUrl = resJson.url;
         setProducts((prev) =>
           prev.map((item) => {
             if (item.id !== task.productId) return item;
-            if (task.color === 'white') return { ...item, whiteUrl: cosUrl };
-            if (task.color === 'black') return { ...item, blackUrl: cosUrl };
-            if (task.color === 'apricot') return { ...item, apricotUrl: cosUrl };
-            if (task.color === 'green') return { ...item, greenUrl: cosUrl };
+            const remainingErrors = { ...item.cosUploadErrors };
+            delete remainingErrors[task.color];
+            const cosUploadErrors = Object.keys(remainingErrors).length ? remainingErrors : undefined;
+            if (task.color === 'white') return { ...item, whiteUrl: cosUrl, cosUploadErrors };
+            if (task.color === 'black') return { ...item, blackUrl: cosUrl, cosUploadErrors };
+            if (task.color === 'apricot') return { ...item, apricotUrl: cosUrl, cosUploadErrors };
+            if (task.color === 'green') return { ...item, greenUrl: cosUrl, cosUploadErrors };
             return item;
           })
         );
@@ -1372,7 +1399,25 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       <div className="space-y-5">
         <div className="border-b border-blue-100 pb-4">
           <h1 className="text-lg font-semibold text-slate-900">女士短袖 · 商品上架</h1>
-          <p className="mt-0.5 text-xs text-slate-500">导入商品和模板，生成四色图片后导出上架文件</p>
+                  <p className="mt-0.5 text-xs text-slate-500">选择类目，导入商品和对应模板，再生成图片并导出</p>
+          <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="选择商品类目">
+            {WOMEN_PRODUCT_CATEGORIES.map((category) => (
+              <button
+                key={category.id}
+                type="button"
+                aria-pressed={productCategory === category.id}
+                onClick={() => {
+                  if (productCategory === category.id) return;
+                  setTemplateFile(null);
+                  setLoadedTemplateCategory(null);
+                  setProductCategory(category.id);
+                }}
+                className={`rounded-md border px-3 py-2 text-xs font-medium transition-colors ${productCategory === category.id ? 'border-blue-600 bg-blue-600 text-white' : 'border-blue-100 bg-white text-slate-700 hover:border-blue-300 hover:bg-blue-50'}`}
+              >
+                {category.label}
+              </button>
+            ))}
+          </div>
         </div>
         {/* 步骤 1 & 2 并排核心卡片 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1455,11 +1500,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {templateFile ? '自定义底表' : '系统默认模板'}
+                  {templateFile ? '已保存模板' : activeCategory.configured ? '系统默认模板' : '需要配置模板'}
                 </span>
               </div>
 
-              <p className="text-xs text-slate-500">使用系统模板，或上传自定义目标底表。</p>
+              <p className="text-xs text-slate-500">当前类目：{activeCategory.label}。模板按类目分别保存，切换不会覆盖其他类目。</p>
 
               {/* 模板操作区 */}
               {templateFile ? (
@@ -1468,7 +1513,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     <FileSpreadsheet className="w-5 h-5 text-purple-600 shrink-0" />
                     <div className="truncate">
                       <p className="text-xs font-bold text-slate-800 truncate">{templateFile.name}</p>
-                      <p className="text-[11px] text-slate-500">已载入自定义上架底表模板</p>
+                      <p className="text-[11px] text-slate-500">{loadedTemplateCategory === productCategory ? '此类目模板已载入并保存' : '模板加载中'}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
@@ -1494,8 +1539,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <div className="flex items-center gap-2.5 truncate">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                     <div>
-                      <p className="text-xs font-bold text-slate-800">使用系统内置标准多工作表模板</p>
-                      <p className="text-[11px] text-slate-500">含 C6 中文标题、D6 英文标题、SPU 与 4色×5码 SKU 矩阵</p>
+                      <p className="text-xs font-bold text-slate-800">{activeCategory.configured ? '使用系统内置标准多工作表模板' : '该类目尚未配置专用模板'}</p>
+                      <p className="text-[11px] text-slate-500">{activeCategory.configured ? '沿用现有大码写入规则' : '请上传此类目的目标模板，避免沿用大码写入位置'}</p>
                     </div>
                   </div>
                   <button
@@ -1503,7 +1548,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     onClick={() => templateInputRef.current?.click()}
                     className="px-3 py-1.5 rounded-lg border border-purple-300 bg-white hover:bg-purple-50 text-purple-700 text-xs font-semibold cursor-pointer shrink-0"
                   >
-                    上传自定义底表
+                    {activeCategory.configured ? '上传自定义底表' : '上传此类目模板'}
                   </button>
                 </div>
               )}
@@ -1850,6 +1895,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                           {rowRangeLabel}
                         </span>
                       </div>
+                      {item.cosUploadErrors && Object.keys(item.cosUploadErrors).length > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900" role="status">
+                          <span>COS 上传未完成：{Object.entries(item.cosUploadErrors).map(([key, message]) => `${COLOR_CONFIG.find((color) => color.key === key)?.name || key}（${message}）`).join('；')}</span>
+                          <button type="button" onClick={handleUploadAllToCos} disabled={isUploadingCos} className="shrink-0 font-semibold text-blue-700 hover:underline disabled:opacity-50">同步图片</button>
+                        </div>
+                      )}
 
                       {/* 图片展示五联格：原图 | 白色款 | 黑色款 | 杏色款 | 绿色款 */}
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 py-1">

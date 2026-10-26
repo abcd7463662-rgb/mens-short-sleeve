@@ -438,38 +438,51 @@ async function startServer() {
   });
 
   const WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
-  const WOMEN_TEMPLATE_FILE = path.join(WOMEN_TEMPLATE_DIR, 'template.xlsx');
-  const WOMEN_TEMPLATE_META = path.join(WOMEN_TEMPLATE_DIR, 'meta.json');
+  const LEGACY_WOMEN_TEMPLATE_DIR = path.join(process.cwd(), 'women_template_storage');
+  const WOMEN_TEMPLATE_CATEGORIES = ['womens-plus-tee', 'womens-standard-tee', 'mens-hoodie', 'womens-hoodie'] as const;
+  const getWomenTemplatePaths = (category: string) => {
+    const dir = path.join(WOMEN_TEMPLATE_DIR, category);
+    const categoryPaths = { dir, file: path.join(dir, 'template.xlsx'), meta: path.join(dir, 'meta.json') };
+    if (category === 'womens-plus-tee' && !fs.existsSync(categoryPaths.file)) {
+      const legacy = { dir: LEGACY_WOMEN_TEMPLATE_DIR, file: path.join(LEGACY_WOMEN_TEMPLATE_DIR, 'template.xlsx'), meta: path.join(LEGACY_WOMEN_TEMPLATE_DIR, 'meta.json') };
+      if (fs.existsSync(legacy.file)) return legacy;
+    }
+    return categoryPaths;
+  };
+  const resolveWomenCategory = (value: unknown) =>
+    typeof value === 'string' && WOMEN_TEMPLATE_CATEGORIES.includes(value as (typeof WOMEN_TEMPLATE_CATEGORIES)[number])
+      ? value
+      : null;
 
   app.get('/api/women/template', (req, res) => {
-    if (!fs.existsSync(WOMEN_TEMPLATE_FILE)) {
-      res.json({ exists: false });
-      return;
-    }
+    const category = resolveWomenCategory(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    const paths = getWomenTemplatePaths(category);
+    if (!fs.existsSync(paths.file)) { res.json({ exists: false }); return; }
     let meta: any = {};
-    try {
-      meta = JSON.parse(fs.readFileSync(WOMEN_TEMPLATE_META, 'utf8'));
-    } catch {
-      meta = {};
-    }
-    res.json({ exists: true, name: meta.name || 'women-template.xlsx', savedAt: meta.savedAt });
+    try { meta = JSON.parse(fs.readFileSync(paths.meta, 'utf8')); } catch { meta = {}; }
+    res.json({ exists: true, name: meta.name || `${category}-template.xlsx`, savedAt: meta.savedAt });
   });
 
   app.get('/api/women/template/file', (req, res) => {
-    if (!fs.existsSync(WOMEN_TEMPLATE_FILE)) {
-      res.status(404).json({ error: '尚未保存女士上架模板' });
-      return;
-    }
-    const meta = JSON.parse(fs.readFileSync(WOMEN_TEMPLATE_META, 'utf8'));
+    const category = resolveWomenCategory(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    const paths = getWomenTemplatePaths(category);
+    if (!fs.existsSync(paths.file)) { res.status(404).json({ error: '该类目尚未保存上架模板' }); return; }
+    let meta: any = {};
+    try { meta = JSON.parse(fs.readFileSync(paths.meta, 'utf8')); } catch { meta = {}; }
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(meta.name || 'women-template.xlsx')}"`);
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(meta.name || `${category}-template.xlsx`)}"`);
     res.setHeader('Cache-Control', 'no-store');
-    fs.createReadStream(WOMEN_TEMPLATE_FILE).pipe(res);
+    fs.createReadStream(paths.file).pipe(res);
   });
 
   app.post('/api/women/template', (req, res) => {
     try {
       const { fileBase64, filename } = req.body;
+      const category = resolveWomenCategory(req.query.category || req.body.category);
+      if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+      const paths = getWomenTemplatePaths(category);
       if (typeof fileBase64 !== 'string' || !fileBase64) {
         res.status(400).json({ error: '缺少模板文件数据' });
         return;
@@ -479,10 +492,10 @@ async function startServer() {
         res.status(400).json({ error: '模板文件为空' });
         return;
       }
-      fs.mkdirSync(WOMEN_TEMPLATE_DIR, { recursive: true });
+      fs.mkdirSync(paths.dir, { recursive: true });
       const safeName = path.basename(String(filename || 'women-template.xlsx'));
-      fs.writeFileSync(WOMEN_TEMPLATE_FILE, buffer);
-      fs.writeFileSync(WOMEN_TEMPLATE_META, JSON.stringify({ name: safeName, savedAt: new Date().toISOString(), size: buffer.length }, null, 2));
+      fs.writeFileSync(paths.file, buffer);
+      fs.writeFileSync(paths.meta, JSON.stringify({ name: safeName, savedAt: new Date().toISOString(), size: buffer.length }, null, 2));
       res.json({ success: true, name: safeName });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '保存女士模板失败' });
@@ -491,7 +504,14 @@ async function startServer() {
 
   app.delete('/api/women/template', (req, res) => {
     try {
-      fs.rmSync(WOMEN_TEMPLATE_DIR, { recursive: true, force: true });
+      const category = resolveWomenCategory(req.query.category);
+      if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+      const paths = getWomenTemplatePaths(category);
+      if (category === 'womens-plus-tee' && paths.dir === LEGACY_WOMEN_TEMPLATE_DIR) {
+        for (const file of [paths.file, paths.meta]) if (fs.existsSync(file)) fs.unlinkSync(file);
+      } else {
+        fs.rmSync(paths.dir, { recursive: true, force: true });
+      }
       res.json({ success: true });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '删除女士模板失败' });
