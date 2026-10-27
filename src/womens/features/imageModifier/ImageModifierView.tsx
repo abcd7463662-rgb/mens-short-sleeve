@@ -1063,7 +1063,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         : productCategory === 'womens-standard-tee'
           ? buildStandardTemplateRules([singleProduct])
           : buildMultiProductTemplateRules([singleProduct]);
-      const res = await executeTemplateGeneration(templateFile, 1, rules);
+      const res = await executeTemplateGeneration(templateFile, undefined, rules);
 
       downloadTemplateFile(res.outputBlob, res.fileName);
       void saveSourceUrlsToHStore([p]);
@@ -1163,7 +1163,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         : productCategory === 'womens-standard-tee'
           ? buildStandardTemplateRules(inputs)
           : buildMultiProductTemplateRules(inputs);
-      const res = await executeTemplateGeneration(templateFile, 1, rules);
+      const res = await executeTemplateGeneration(templateFile, undefined, rules);
 
       downloadTemplateFile(res.outputBlob, res.fileName);
       void saveSourceUrlsToHStore(currentProducts);
