@@ -63,6 +63,7 @@ import { executeTemplateGeneration } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
 import { exportCombinedTemplateInWorker } from '../../../features/templateGenerator/combinedExport';
+import { repairSportWorkbookSizes } from '../templateGenerator/sportWorkbookRepair';
 import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../../utils/storeDedup';
 import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
@@ -246,6 +247,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const CONCURRENCY = 12;
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
+  const [isRepairingSportWorkbook, setIsRepairingSportWorkbook] = useState(false);
   const [batchExportPhase, setBatchExportPhase] = useState('');
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -472,6 +474,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   const tableInputRef = useRef<HTMLInputElement | null>(null);
   const templateInputRef = useRef<HTMLInputElement | null>(null);
+  const sportRepairInputRef = useRef<HTMLInputElement | null>(null);
   const processingRef = useRef<boolean>(false);
   const productsRef = useRef<ProductItem[]>([]);
 
@@ -685,6 +688,21 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     } finally {
       setIsTemplateUploading(false);
       if (templateInputRef.current) templateInputRef.current.value = '';
+    }
+  };
+
+  const handleRepairSportWorkbook = async (file: File) => {
+    setIsRepairingSportWorkbook(true);
+    try {
+      const output = await repairSportWorkbookSizes(file);
+      const fileName = `${file.name.replace(/\.xlsx$/i, '')}_尺码修正为S-XXL.xlsx`;
+      downloadTemplateFile(output, fileName);
+      onShowToast('旧表格尺码已修正为 S、M、L、XL、XXL，已下载修正版。', 'success');
+    } catch (error) {
+      onShowToast(error instanceof Error ? error.message : '修正运动短袖尺码失败', 'error');
+    } finally {
+      setIsRepairingSportWorkbook(false);
+      if (sportRepairInputRef.current) sportRepairInputRef.current.value = '';
     }
   };
 
@@ -1465,6 +1483,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           if (f) handleTemplateUpload(f);
         }}
       />
+      <input
+        ref={sportRepairInputRef}
+        type="file"
+        accept=".xlsx"
+        className="hidden"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) handleRepairSportWorkbook(f);
+        }}
+      />
 
       {/* 极简主三步工作流 */}
       <div className="space-y-5">
@@ -1494,6 +1522,23 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             ))}
           </div>}
         </div>
+        {productCategory === 'womens-sport-tee' && (
+          <details className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
+            <summary className="cursor-pointer text-xs font-semibold text-amber-900">修正旧版运动短袖表格尺码</summary>
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={isRepairingSportWorkbook}
+                onClick={() => sportRepairInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+              >
+                {isRepairingSportWorkbook ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
+                {isRepairingSportWorkbook ? '正在修正...' : '上传 0XL–5XL 旧表并修正'}
+              </button>
+              <span className="text-xs text-amber-800">修正为 S、M、L、XL、XXL，并删除每款多出的两行 SKU。</span>
+            </div>
+          </details>
+        )}
         {/* 步骤 1 & 2 并排核心卡片 */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* 模块 1：商品信息导入与谷歌翻译 */}
