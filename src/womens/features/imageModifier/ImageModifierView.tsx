@@ -248,6 +248,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
   const [batchExportPhase, setBatchExportPhase] = useState('');
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
+  const [exportTranslationProgress, setExportTranslationProgress] = useState<{ done: number; total: number } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitleText, setEditTitleText] = useState<string>('');
@@ -1134,15 +1135,25 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const needTrans = exportProducts.some((p) => !p.englishTitle || p.englishTitle === cleanChineseTitle(p.title));
       if (needTrans) {
         try {
+          setBatchExportPhase(`正在补翻译 ${exportProducts.length} 个商品英文标题...`);
           const titles = exportProducts.map((p) => cleanChineseTitle(p.title || ''));
-          const translatedList = await translateBatchTitlesWithGoogle(titles, 'en');
+          setExportTranslationProgress({ done: 0, total: titles.length });
+          const translatedList = await Promise.race([
+            translateBatchTitlesWithGoogle(titles, 'en', (done, total) => {
+              setExportTranslationProgress({ done, total });
+              setBatchExportPhase(`正在补翻译商品标题 ${done}/${total}...`);
+            }),
+            new Promise<string[]>((_, reject) => setTimeout(() => reject(new Error('翻译超时')), 30000))
+          ]).catch((err) => { console.warn('英文标题补翻译失败，将使用已有标题', err); return titles; });
           currentProducts = exportProducts.map((p, idx) => ({
             ...p,
             englishTitle: cleanEnglishTitle(translatedList[idx] || p.englishTitle || p.title),
           }));
           setProducts(currentProducts);
+          setExportTranslationProgress(null);
         } catch (tErr) {
           console.warn('Auto translation during batch export skipped:', tErr);
+          setExportTranslationProgress(null);
         }
       }
 
@@ -1214,6 +1225,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     } finally {
       setIsBatchExporting(false);
       setBatchExportPhase('');
+      setExportTranslationProgress(null);
     }
   };
 
@@ -1821,6 +1833,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               {isBatchExporting && <div className="w-full basis-full" role="status" aria-live="polite">
                 <div className="mb-1 flex items-center justify-between text-xs text-blue-700"><span>{batchExportPhase || '正在准备导出...'}</span><span>请勿关闭页面</span></div>
                 <div className="h-1.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-blue-600" /></div>
+                {exportTranslationProgress && (
+                  <div className="mt-1 text-xs text-slate-600">
+                    <div className="flex justify-between"><span>翻译进度</span><span>{exportTranslationProgress.done} / {exportTranslationProgress.total} ({exportTranslationProgress.total > 0 ? Math.round((exportTranslationProgress.done / exportTranslationProgress.total) * 100) : 0}%)</span></div>
+                  </div>
+                )}
               </div>}
 
               {false && <button

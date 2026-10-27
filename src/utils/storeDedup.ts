@@ -11,13 +11,40 @@ export function normalizeSourceUrl(url: string): string {
 }
 
 export async function readStoreHistory(storeName: StoreName): Promise<string[]> {
-  const response = await fetch('/api/cos/store-links/read?storeName=' + encodeURIComponent(storeName));
+  return readStoreHistoryInternal(storeName);
+}
+
+const STORE_HISTORY_CACHE_MS = 5 * 60 * 1000;
+const storeHistoryCache = new Map<StoreName, { urls: string[]; expiresAt: number }>();
+const storeHistoryRequests = new Map<StoreName, Promise<string[]>>();
+
+export async function readStoreHistorySafe(storeName: StoreName): Promise<string[]> {
+  try {
+    return await readStoreHistory(storeName);
+  } catch (error) {
+    console.warn('读取店铺去重历史失败，本次导出按未去重继续:', error);
+    return [];
+  }
+}
+
+async function readStoreHistoryInternal(storeName: StoreName): Promise<string[]> {
+  const cached = storeHistoryCache.get(storeName);
+  if (cached && cached.expiresAt > Date.now()) return cached.urls;
+  const pending = storeHistoryRequests.get(storeName);
+  if (pending) return pending;
+  const request = (async () => {
+    const response = await fetch('/api/cos/store-links/read?storeName=' + encodeURIComponent(storeName));
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
     throw new Error(result.error || '读取店铺去重历史失败');
   }
   const result = await response.json();
-  return Array.isArray(result.urls) ? result.urls.map((url: unknown) => String(url || '')) : [];
+    const urls = Array.isArray(result.urls) ? result.urls.map((url: unknown) => String(url || '')) : [];
+    storeHistoryCache.set(storeName, { urls, expiresAt: Date.now() + STORE_HISTORY_CACHE_MS });
+    return urls;
+  })().finally(() => storeHistoryRequests.delete(storeName));
+  storeHistoryRequests.set(storeName, request);
+  return request;
 }
 
 export async function saveStoreHistory(storeName: StoreName, urls: string[]): Promise<void> {
@@ -29,6 +56,7 @@ export async function saveStoreHistory(storeName: StoreName, urls: string[]): Pr
   });
   const result = await response.json().catch(() => ({}));
   if (!response.ok || result.success === false) throw new Error(result.error || '保存店铺去重历史失败');
+  storeHistoryCache.delete(storeName);
 }
 
 export function filterDuplicateUrls<T>(items: T[], getUrl: (item: T) => string, knownUrls: string[]) {

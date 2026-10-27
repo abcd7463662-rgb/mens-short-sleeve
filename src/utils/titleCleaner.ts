@@ -8,6 +8,12 @@
 
 export const MAX_TITLE_LENGTH = 250;
 
+const MAY_INCLUDE_PATTERN = /(?:可\s*能\s*包\s*含|可\s*能\s*包\s*括|may\s*(?:also\s*)?include|might\s*(?:also\s*)?include|could\s*(?:also\s*)?include)\s*[:：]?/gi;
+
+function removeMayIncludePrefix(value: string): string {
+  return value.replace(MAY_INCLUDE_PATTERN, '').replace(/\s{2,}/g, ' ').trim();
+}
+
 /**
  * 截断标题，限制字符数不超过 250，多出的字符从后面删除
  */
@@ -29,7 +35,7 @@ export function cleanChineseTitle(rawTitle: string): string {
   let title = String(rawTitle);
 
   // Remove the source-sheet annotation without changing the remaining product title.
-  title = title.replace(/可\s*能\s*包\s*含\s*[:：]?/g, '');
+  title = removeMayIncludePrefix(title);
 
   // 1. 剔除注册商标符号 ® 及 (R)、（R）、™
   title = title.replace(/[®™\u00AE\u2122]/g, '');
@@ -81,7 +87,7 @@ export function cleanChineseTitle(rawTitle: string): string {
  */
 export function cleanEnglishTitle(rawEnglish: string): string {
   if (!rawEnglish) return '';
-  let eng = String(rawEnglish);
+  let eng = removeMayIncludePrefix(String(rawEnglish));
 
   // 1. 剔除注册商标符号 ® 及 (R)、（R）、™
   eng = eng.replace(/[®™\u00AE\u2122]/g, '');
