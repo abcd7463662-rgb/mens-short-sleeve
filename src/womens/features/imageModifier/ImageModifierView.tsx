@@ -62,6 +62,7 @@ import { buildStandardTemplateRules } from '../templateGenerator/standardRules';
 import { executeTemplateGeneration } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
+import { exportCombinedTemplateInWorker } from '../../../features/templateGenerator/combinedExport';
 import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../../utils/storeDedup';
 import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
@@ -245,6 +246,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const CONCURRENCY = 12;
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
+  const [batchExportPhase, setBatchExportPhase] = useState('');
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -1117,6 +1119,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
 
     setIsBatchExporting(true);
+    setBatchExportPhase('正在读取商品和模板...');
     try {
       const storeName = selectedStore;
       const knownUrls = await readStoreHistory(storeName);
@@ -1183,18 +1186,20 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         };
       });
 
-      const exportName = products.length > 1
+      const outputName = products.length > 1
         ? `${activeCategory.label}_上架模板_共${products.length}款.xlsx`
-        : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
-      const rules = productCategory === 'womens-sport-tee'
-        ? buildSportTemplateRules(inputs)
-        : productCategory === 'womens-standard-tee'
-          ? buildStandardTemplateRules(inputs)
-          : buildMultiProductTemplateRules(inputs);
-      const res = await executeTemplateGeneration(templateFile, undefined, rules);
+        : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
+      const { buffer, fileName } = await exportCombinedTemplateInWorker({
+        template: templateFile,
+        products: inputs,
+        gender: 'women',
+        category: productCategory,
+        outputName,
+        onProgress: setBatchExportPhase,
+      });
 
       await saveSourceUrlsToHStore(currentProducts, storeName);
-      downloadTemplateFile(res.outputBlob, res.fileName);
+      downloadTemplateFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName);
       const missingImages = currentProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !url.includes('.myqcloud.com'))).length, 0);
       onShowToast(
         missingImages
@@ -1208,6 +1213,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(err.message || '整合导出模板失败', 'error');
     } finally {
       setIsBatchExporting(false);
+      setBatchExportPhase('');
     }
   };
 
@@ -1810,8 +1816,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 title="将所有商品按每款 21 行（1行SPU+4色×5码SKU）合并导出至同一个 Excel 表格，C列填中文标题，D6填谷歌翻译英文标题，4色随机排布"
               >
                 <FileDown className="w-4 h-4" />
-                <span>{isBatchExporting ? '正在导出整合表格...' : '导出整合上架模板 (.xlsx)'}</span>
+                <span>{isBatchExporting ? batchExportPhase || '正在导出整合表格...' : '导出整合上架模板 (.xlsx)'}</span>
               </button>
+              {isBatchExporting && <div className="w-full basis-full" role="status" aria-live="polite">
+                <div className="mb-1 flex items-center justify-between text-xs text-blue-700"><span>{batchExportPhase || '正在准备导出...'}</span><span>请勿关闭页面</span></div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-blue-600" /></div>
+              </div>}
 
               {false && <button
                 type="button"

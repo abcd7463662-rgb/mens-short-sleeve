@@ -46,6 +46,7 @@ import {
 } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
+import { exportCombinedTemplateInWorker } from '../templateGenerator/combinedExport';
 import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../utils/storeDedup';
 import {
   deleteCategoryTemplateFile,
@@ -104,6 +105,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 3. 处理与导出状态
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
+  const [batchExportPhase, setBatchExportPhase] = useState('');
   const [isExportingOriginal, setIsExportingOriginal] = useState<boolean>(false);
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
   const [translationProgress, setTranslationProgress] = useState<{
@@ -472,6 +474,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
 
     setIsBatchExporting(true);
+    setBatchExportPhase('正在读取商品和模板...');
     try {
       const knownUrls = await readStoreHistory(selectedStore);
       const filtered = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
@@ -498,17 +501,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         };
       });
 
-      const res = await generateMultiProductTemplateFile({
-        products: inputs,
-        baseTemplateFile: templateFile || undefined,
-        customFilename:
-          exportProducts.length > 1
-            ? `电商多商品汇总上架模板_共${exportProducts.length}款(已填黑白颜色).xlsx`
-            : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`,
+      const outputName = exportProducts.length > 1
+        ? `电商多商品汇总上架模板_共${exportProducts.length}款(已填黑白颜色).xlsx`
+        : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
+      const { buffer, fileName } = await exportCombinedTemplateInWorker({
+        template: templateFile, products: inputs, gender: 'men', outputName, onProgress: setBatchExportPhase,
       });
-
       await saveStoreHistory(selectedStore, exportProducts.map((product) => product.imageUrl));
-      downloadTemplateFile(res.outputBlob, res.fileName);
+      downloadTemplateFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName);
 
       const blackTotal = exportProducts.filter((p) => p.selectedColor === 'black').length;
       const whiteTotal = exportProducts.filter((p) => p.selectedColor === 'white').length;
@@ -521,6 +521,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(err.message || '整合导出模板失败', 'error');
     } finally {
       setIsBatchExporting(false);
+      setBatchExportPhase('');
     }
   };
 
@@ -1080,7 +1081,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 <Download className={`h-3.5 w-3.5 ${isBatchExporting ? 'animate-bounce' : ''}`} />
-                <span>{isBatchExporting ? '正在生成...' : '导出上架模板'}</span>
+                <span>{isBatchExporting ? batchExportPhase || '正在导出...' : '导出上架模板'}</span>
               </button>
               <details className="relative">
                 <summary className="cursor-pointer list-none rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50">其他导出</summary>
@@ -1093,6 +1094,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   </button>
                 </div>
               </details>
+              {isBatchExporting && <div className="mt-2 w-full basis-full" role="status" aria-live="polite">
+                <div className="mb-1 flex items-center justify-between text-xs text-blue-700"><span>{batchExportPhase || '正在准备导出...'}</span><span>请勿关闭页面</span></div>
+                <div className="h-1.5 overflow-hidden rounded-full bg-blue-100"><div className="h-full w-1/3 animate-pulse rounded-full bg-blue-600" /></div>
+              </div>}
             </div>
           </div>
 

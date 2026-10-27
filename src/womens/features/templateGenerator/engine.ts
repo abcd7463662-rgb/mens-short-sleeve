@@ -181,8 +181,10 @@ export async function generateMappedTemplateFile(options: {
 export async function executeTemplateGeneration(
   file: File,
   targetSheetIdx?: number,
-  customRules: CellRule[] = TEMPLATE_RULES
+  customRules: CellRule[] = TEMPLATE_RULES,
+  options: { collectModifications?: boolean } = {}
 ): Promise<TemplateResult> {
+  const collectModifications = options.collectModifications !== false;
   const arrayBuffer = await getTemplateBuffer(file);
 
   try {
@@ -268,7 +270,7 @@ export async function executeTemplateGeneration(
 
       const verified = rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : String(cell.value ?? '');
 
-      modifications.push({
+      if (collectModifications) modifications.push({
         cell: rule.cell,
         column: rule.column,
         value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
@@ -360,7 +362,7 @@ export async function executeTemplateGeneration(
       } else {
         sheet[rule.cell] = { t: 's', v: rule.value };
       }
-      modifications.push({
+      if (collectModifications) modifications.push({
         cell: rule.cell,
         column: rule.column,
         value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
