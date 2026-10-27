@@ -63,7 +63,7 @@ import { executeTemplateGeneration } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
 import { exportCombinedTemplateInWorker } from '../../../features/templateGenerator/combinedExport';
-import { repairSportWorkbookSizes } from '../templateGenerator/sportWorkbookRepair';
+import { repairSportWorkbookAttributes } from '../templateGenerator/sportWorkbookRepair';
 import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../../utils/storeDedup';
 import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
@@ -694,10 +694,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const handleRepairSportWorkbook = async (file: File) => {
     setIsRepairingSportWorkbook(true);
     try {
-      const output = await repairSportWorkbookSizes(file);
-      const fileName = `${file.name.replace(/\.xlsx$/i, '')}_尺码修正为S-XXL.xlsx`;
+      const output = await repairSportWorkbookAttributes(file);
+      const fileName = `${file.name.replace(/\.xlsx$/i, '')}_AC否_AE圆领.xlsx`;
       downloadTemplateFile(output, fileName);
-      onShowToast('旧表格尺码已修正为 S、M、L、XL、XXL，已下载修正版。', 'success');
+      onShowToast('已修正现有表格：每个商品的 AC=否、AE=圆领；其他内容保持不变。', 'success');
     } catch (error) {
       onShowToast(error instanceof Error ? error.message : '修正运动短袖尺码失败', 'error');
     } finally {
@@ -1524,7 +1524,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         </div>
         {productCategory === 'womens-sport-tee' && (
           <details className="rounded border border-amber-200 bg-amber-50 px-3 py-2">
-            <summary className="cursor-pointer text-xs font-semibold text-amber-900">修正旧版运动短袖表格尺码</summary>
+            <summary className="cursor-pointer text-xs font-semibold text-amber-900">修复现有运动短袖表格属性</summary>
             <div className="mt-2 flex flex-wrap items-center gap-3">
               <button
                 type="button"
@@ -1533,9 +1533,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 className="inline-flex items-center gap-2 rounded border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
                 {isRepairingSportWorkbook ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
-                {isRepairingSportWorkbook ? '正在修正...' : '上传旧表并统一修正尺码'}
+                {isRepairingSportWorkbook ? '正在修复...' : '上传表格并修正 AC / AE'}
               </button>
-              <span className="text-xs text-amber-800">尺码名称不限；按商品区结构修正为 S、M、L、XL、XXL，必要时删除多余 SKU 行。</span>
+              <span className="text-xs text-amber-800">将每个商品 SPU 行的 AC 设为“否”、AE 设为“圆领”；尺码和其他单元格保持不变。</span>
             </div>
           </details>
         )}
