@@ -812,7 +812,16 @@ async function startServer() {
     }
   });
 
-  const getStoreLinksKey = (value: unknown) => value === 'Y店' || value === 'H店' ? value : null;
+  const STORE_LINKS_KEYS = {
+    'YXIG店': 'YXIG店',
+    'Yxig店': 'Yxig店',
+    'Y店': 'Yxig店',
+    'Hidden Power Clothing': 'Hidden Power Clothing',
+    'H店': 'Hidden Power Clothing',
+  } as const;
+  const getStoreLinksKey = (value: unknown) => typeof value === 'string' && Object.prototype.hasOwnProperty.call(STORE_LINKS_KEYS, value)
+    ? STORE_LINKS_KEYS[value as keyof typeof STORE_LINKS_KEYS]
+    : null;
   const getStoreLinksSettings = () => ({
     secretId: process.env.TENCENT_COS_SECRET_ID || '',
     secretKey: process.env.TENCENT_COS_SECRET_KEY || '',
@@ -828,26 +837,49 @@ async function startServer() {
       return value.split(/[\r\n]+/).map((line) => line.trim()).filter((line) => /^https?:\/\//i.test(line));
     }
   };
-  const readStoreLinks = async (storeName: 'Y店' | 'H店') => {
+  const readStoreLinks = async (storeName: string) => {
+    const legacyNames = storeName === 'Yxig店' ? ['Y店'] : storeName === 'Hidden Power Clothing' ? ['H店'] : [];
+    const keyNames = [storeName, ...legacyNames];
+    const collected = new Set<string>();
     const settings = getStoreLinksSettings();
     if (settings.secretId && settings.secretKey && settings.bucket) {
       try {
         const COS = (await import('cos-nodejs-sdk-v5')).default;
         const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
-        const body = await new Promise<Buffer | null>((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: storeName }, (err: any, data: any) => resolve(err || !data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body))));
-        if (body) return parseStoreLinks(body.toString('utf8'));
-        const jsonBody = await new Promise<Buffer | null>((resolve) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key: storeName + '.json' }, (err: any, data: any) => resolve(err || !data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body))));
-        if (jsonBody) return parseStoreLinks(jsonBody.toString('utf8'));
-      } catch (error) { console.warn('COS store links read fallback:', error); }
+        const getObjectBody = (Key: string) => new Promise<Buffer | null>((resolve, reject) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any, data: any) => {
+          if (!err) {
+            resolve(!data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body));
+            return;
+          }
+          if (err.statusCode === 404 || err.code === 'NoSuchKey' || err.code === 'NotFound') resolve(null);
+          else reject(err);
+        }));
+        for (const keyName of keyNames) {
+          const body = await getObjectBody(keyName);
+          if (body) parseStoreLinks(body.toString('utf8')).forEach((url) => collected.add(url));
+          const jsonBody = await getObjectBody(keyName + '.json');
+          if (jsonBody) parseStoreLinks(jsonBody.toString('utf8')).forEach((url) => collected.add(url));
+        }
+      } catch (error) {
+        console.warn('COS store links read failed:', error);
+        throw new Error('腾讯云去重历史读取失败，请检查 COS 配置或稍后重试');
+      }
     }
-    try { return parseStoreLinks(fs.readFileSync(path.join(process.cwd(), 'store_records', storeName + '.json'), 'utf8')); } catch { return []; }
+    for (const keyName of keyNames) {
+      try { parseStoreLinks(fs.readFileSync(path.join(process.cwd(), 'store_records', keyName + '.json'), 'utf8')).forEach((url) => collected.add(url)); } catch { /* Try the next store key. */ }
+    }
+    return [...collected];
   };
 
   app.get('/api/cos/store-links/read', async (req, res) => {
-    const storeName = getStoreLinksKey(req.query.storeName);
-    if (!storeName) { res.status(400).json({ error: '店铺名称无效' }); return; }
-    const urls = await readStoreLinks(storeName);
-    res.json({ success: true, storeName, urls, totalCount: urls.length });
+    try {
+      const storeName = getStoreLinksKey(req.query.storeName);
+      if (!storeName) { res.status(400).json({ error: '店铺名称无效' }); return; }
+      const urls = await readStoreLinks(storeName);
+      res.json({ success: true, storeName, urls, totalCount: urls.length });
+    } catch (error: any) {
+      res.status(502).json({ error: error.message || '读取店铺历史链接失败' });
+    }
   });
 
   app.post('/api/cos/store-links/save', async (req, res) => {

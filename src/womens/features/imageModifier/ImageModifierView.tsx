@@ -62,6 +62,7 @@ import { buildStandardTemplateRules } from '../templateGenerator/standardRules';
 import { executeTemplateGeneration } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
+import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../../utils/storeDedup';
 import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
 export interface ProductItem {
@@ -190,7 +191,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       : initialCategory || 'womens-plus-tee';
   });
   const activeCategory = WOMEN_PRODUCT_CATEGORIES.find((category) => category.id === productCategory)!;
-  const [selectedStore, setSelectedStore] = useState<'Y店' | 'H店'>(initialCategory === 'womens-sport-tee' ? 'Y店' : 'H店');
+  const [selectedStore, setSelectedStore] = useState<StoreName>(initialCategory === 'womens-sport-tee' ? 'Yxig店' : 'Hidden Power Clothing');
   const [isTemplateUploading, setIsTemplateUploading] = useState(false);
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
@@ -209,7 +210,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       setTemplateFile(null);
       setLoadedTemplateCategory(null);
       setProductCategory(initialCategory);
-      setSelectedStore(initialCategory === 'womens-sport-tee' ? 'Y店' : 'H店');
+      setSelectedStore(initialCategory === 'womens-sport-tee' ? 'Yxig店' : 'Hidden Power Clothing');
     }
   }, [initialCategory, productCategory]);
 
@@ -701,39 +702,40 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast('请先导入商品信息表格', 'error');
       return;
     }
-    try {
-      const response = await fetch(`/api/cos/store-links/read?storeName=${encodeURIComponent(selectedStore)}`);
-      if (response.ok) {
-        const data = await response.json();
-        const known = new Set((Array.isArray(data.urls) ? data.urls : []).map((url: string) => normalizeSourceUrl(url)));
-        const duplicates = products.filter((product) => known.has(normalizeSourceUrl(product.imageUrl)));
-        const unique = products.filter((product) => !known.has(normalizeSourceUrl(product.imageUrl)));
-        if (duplicates.length) {
-          setProducts(unique);
-          productsRef.current = unique;
-          if (!unique.length) { onShowToast(`${selectedStore}历史库已收录这 ${duplicates.length} 款商品，已跳过重复生图。`, 'info'); return; }
-          onShowToast(`已跳过 ${duplicates.length} 款 ${selectedStore}历史重复商品，继续处理 ${unique.length} 款。`, 'info');
-        }
-      }
-    } catch (error) { console.warn('H店重复检查失败，继续处理商品:', error); }
+    const storeName = selectedStore;
     processingRef.current = true;
     setIsProcessing(true);
+    try {
+      const knownUrls = await readStoreHistory(storeName);
+      {
+        const { uniqueItems: unique, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
+        if (duplicateCount) {
+          setProducts(unique);
+          productsRef.current = unique;
+          if (!unique.length) {
+            processingRef.current = false;
+            setIsProcessing(false);
+            onShowToast(`${storeName}历史库已收录这 ${duplicateCount} 款商品，已跳过重复生图。`, 'info');
+            return;
+          }
+          onShowToast(`已跳过 ${duplicateCount} 款 ${storeName}历史重复商品，继续处理 ${unique.length} 款。`, 'info');
+        }
+      }
+    } catch (error) {
+      console.warn('读取店铺去重历史失败:', error);
+      processingRef.current = false;
+      setIsProcessing(false);
+      onShowToast(`${storeName} 去重历史暂时无法读取，请稍后重试。`, 'error');
+      return;
+    }
     scheduleNextTasks();
   };
 
-  const normalizeSourceUrl = (url: string) => {
-    try { const parsed = new URL(url); return (parsed.hostname + parsed.pathname).toLowerCase().replace(/\/$/, ''); }
-    catch { return String(url || '').split('?')[0].trim().toLowerCase(); }
-  };
 
-  const saveSourceUrlsToHStore = async (items: ProductItem[]) => {
+  const saveSourceUrlsToHStore = async (items: ProductItem[], storeName: StoreName = selectedStore) => {
     const urls = [...new Set(items.map((item) => item.imageUrl).filter((url) => /^https?:\/\//i.test(url)))];
     if (!urls.length) return;
-    try {
-      const response = await fetch('/api/cos/store-links/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ storeName: selectedStore, urls }) });
-      const result = await response.json();
-      if (!response.ok || result.success === false) console.warn('H店原图链接保存失败:', result.error);
-    } catch (error) { console.warn('H店原图链接保存失败:', error); }
+    await saveStoreHistory(storeName, urls);
   };
 
   const stopProcessing = () => {
@@ -1029,6 +1031,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       return;
     }
     try {
+      const storeName = selectedStore;
+      const knownUrls = await readStoreHistory(storeName);
+      if (filterDuplicateUrls([p], (product) => product.imageUrl, knownUrls).duplicateCount) {
+        onShowToast(`该商品已存在于 ${storeName} 去重历史中，已跳过导出。`, 'info');
+        return;
+      }
       const cleanedTitle = cleanChineseTitle(p.title) || p.title;
       const cleanedEng = cleanEnglishTitle(p.englishTitle || cleanedTitle);
 
@@ -1076,8 +1084,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           : buildMultiProductTemplateRules([singleProduct]);
       const res = await executeTemplateGeneration(templateFile, undefined, rules);
 
+      await saveSourceUrlsToHStore([p], storeName);
       downloadTemplateFile(res.outputBlob, res.fileName);
-      void saveSourceUrlsToHStore([p]);
       onShowToast(
         localFolderPath.trim()
           ? `成功导出「${cleanedTitle}」标准上架模板（已自动将DS列替换为本地链接：${localFolderPath}）！`
@@ -1109,14 +1117,22 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
     setIsBatchExporting(true);
     try {
+      const storeName = selectedStore;
+      const knownUrls = await readStoreHistory(storeName);
+      const { uniqueItems: exportProducts, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
+      if (duplicateCount) onShowToast(`已按 ${storeName} 去重历史跳过 ${duplicateCount} 款重复商品。`, 'info');
+      if (!exportProducts.length) {
+        onShowToast(`${storeName} 去重历史已收录当前全部商品，没有可导出的新商品。`, 'info');
+        return;
+      }
       // 检查是否有尚未翻译的英文标题，导出前自动进行快速翻译补齐
-      let currentProducts = products;
-      const needTrans = products.some((p) => !p.englishTitle || p.englishTitle === cleanChineseTitle(p.title));
+      let currentProducts = exportProducts;
+      const needTrans = exportProducts.some((p) => !p.englishTitle || p.englishTitle === cleanChineseTitle(p.title));
       if (needTrans) {
         try {
-          const titles = products.map((p) => cleanChineseTitle(p.title || ''));
+          const titles = exportProducts.map((p) => cleanChineseTitle(p.title || ''));
           const translatedList = await translateBatchTitlesWithGoogle(titles, 'en');
-          currentProducts = products.map((p, idx) => ({
+          currentProducts = exportProducts.map((p, idx) => ({
             ...p,
             englishTitle: cleanEnglishTitle(translatedList[idx] || p.englishTitle || p.title),
           }));
@@ -1176,15 +1192,15 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           : buildMultiProductTemplateRules(inputs);
       const res = await executeTemplateGeneration(templateFile, undefined, rules);
 
+      await saveSourceUrlsToHStore(currentProducts, storeName);
       downloadTemplateFile(res.outputBlob, res.fileName);
-      void saveSourceUrlsToHStore(currentProducts);
       const missingImages = currentProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !url.includes('.myqcloud.com'))).length, 0);
       onShowToast(
         missingImages
           ? `模板已导出；${missingImages} 个未生成或未上传到 COS 的图片链接留空，可稍后重新导出。`
           : localFolderPath.trim()
-          ? `成功导出整合模板！全部 ${products.length} 款商品的 DS列 均已安全替换为本地电脑路径「${localFolderPath}」`
-          : `成功导出整合模板！已将全部 ${products.length} 款商品按「${activeCategory.label}」预设规则写入，SPU 与 SKU 均已就绪。`,
+          ? `成功导出整合模板！全部 ${currentProducts.length} 款商品的 DS列 均已安全替换为本地电脑路径「${localFolderPath}」`
+          : `成功导出整合模板！已将全部 ${currentProducts.length} 款商品按「${activeCategory.label}」预设规则写入，SPU 与 SKU 均已就绪。`,
         'success'
       );
     } catch (err: any) {
@@ -1467,7 +1483,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <p className="mt-0.5 text-xs text-slate-500">选择类目，导入商品和对应模板，再生成图片并导出</p>
           <div className="mt-3 flex items-center gap-2">
             <span className="text-xs text-slate-500">原图去重库</span>
-            {(productCategory === 'womens-sport-tee' ? ['Y店', 'H店'] as const : ['H店'] as const).map((store) => <button key={store} type="button" aria-pressed={selectedStore === store} onClick={() => setSelectedStore(store)} className={`rounded border px-2.5 py-1 text-xs font-medium ${selectedStore === store ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-600'}`}>{store}</button>)}
+            {STORE_NAMES.map((store) => <button key={store} type="button" disabled={isProcessing || isBatchExporting} aria-pressed={selectedStore === store} onClick={() => setSelectedStore(store)} className={`rounded border px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${selectedStore === store ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-600'}`}>{store}</button>)}
           </div>
           {!initialCategory && <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="选择商品类目">
             {WOMEN_PRODUCT_CATEGORIES.map((category) => (

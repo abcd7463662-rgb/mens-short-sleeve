@@ -46,6 +46,7 @@ import {
 } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
+import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../utils/storeDedup';
 import {
   deleteCategoryTemplateFile,
   loadCategoryTemplateFile,
@@ -79,6 +80,7 @@ interface PreviewModalData {
 }
 
 export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToast }) => {
+  const [selectedStore, setSelectedStore] = useState<StoreName>('Yxig店');
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [tableFile, setTableFile] = useState<File | null>(null);
@@ -245,7 +247,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           colorOrder: [defaultColor],
         };
       });
-
       setProducts(items);
 
       // 同步当前映射列覆盖状态
@@ -424,6 +425,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       return;
     }
     try {
+      const storeName = selectedStore;
+      const knownUrls = await readStoreHistory(storeName);
+      const { duplicateCount } = filterDuplicateUrls([item], (product) => product.imageUrl, knownUrls);
+      if (duplicateCount) {
+        onShowToast(`该商品已存在于 ${storeName} 去重历史中，已跳过导出。`, 'info');
+        return;
+      }
       const cleanedTitle = cleanChineseTitle(item.title);
       const cleanedEnglish = cleanEnglishTitle(item.englishTitle || cleanedTitle);
       const chosenColor = item.selectedColor;
@@ -444,6 +452,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         customFilename: `${(cleanedTitle || `商品_${index + 1}`).replace(/[/\\?%*:|"<>]/g, '_')}_${chosenColorName}款_上架模板.xlsx`,
       });
 
+      await saveStoreHistory(storeName, [item.imageUrl]);
       downloadTemplateFile(res.outputBlob, res.fileName);
       onShowToast(`成功导出「${cleanedTitle}」上架模板（EE 列填入“${chosenColorName}”，FV 列填入图片直链）！`, 'success');
     } catch (err: any) {
@@ -464,7 +473,18 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
     setIsBatchExporting(true);
     try {
-      const inputs = products.map((p) => {
+      const knownUrls = await readStoreHistory(selectedStore);
+      const filtered = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
+      const exportProducts = filtered.uniqueItems;
+      if (filtered.duplicateCount) {
+        onShowToast(`已按 ${selectedStore} 去重历史跳过 ${filtered.duplicateCount} 款重复商品。`, 'info');
+      }
+      if (exportProducts.length === 0) {
+        onShowToast(`${selectedStore} 去重历史已收录当前全部商品，没有可导出的新商品。`, 'info');
+        return;
+      }
+
+      const inputs = exportProducts.map((p) => {
         const cTitle = p.title || '';
         const eTitle = p.englishTitle || cleanChineseTitle(cTitle);
         const chosenColor = p.selectedColor;
@@ -482,18 +502,19 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         products: inputs,
         baseTemplateFile: templateFile || undefined,
         customFilename:
-          products.length > 1
-            ? `电商多商品汇总上架模板_共${products.length}款(已填黑白颜色).xlsx`
+          exportProducts.length > 1
+            ? `电商多商品汇总上架模板_共${exportProducts.length}款(已填黑白颜色).xlsx`
             : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`,
       });
 
+      await saveStoreHistory(selectedStore, exportProducts.map((product) => product.imageUrl));
       downloadTemplateFile(res.outputBlob, res.fileName);
 
-      const blackTotal = products.filter((p) => p.selectedColor === 'black').length;
-      const whiteTotal = products.filter((p) => p.selectedColor === 'white').length;
+      const blackTotal = exportProducts.filter((p) => p.selectedColor === 'black').length;
+      const whiteTotal = exportProducts.filter((p) => p.selectedColor === 'white').length;
 
       onShowToast(
-        `成功导出整合模板！已将全部 ${products.length} 款衣服填入（黑色 ${blackTotal} 款、白色 ${whiteTotal} 款），EE 列已填入所选颜色，FV 列已填入对应图片直链！`,
+        `成功导出整合模板！已将 ${exportProducts.length} 款衣服填入（黑色 ${blackTotal} 款、白色 ${whiteTotal} 款），EE 列已填入所选颜色，FV 列已填入对应图片直链！`,
         'success'
       );
     } catch (err: any) {
@@ -694,6 +715,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           <div>
             <h1 className="text-lg font-semibold text-slate-900">男士短袖 · 商品上架</h1>
             <p className="mt-0.5 text-xs text-slate-500">导入商品表格，确认颜色后导出上架文件</p>
+            <div className="mt-2 flex flex-wrap items-center gap-2" role="group" aria-label="选择去重店铺">
+              <span className="text-xs text-slate-500">原图去重库</span>
+              {STORE_NAMES.map((store) => <button key={store} type="button" disabled={isBatchExporting} aria-pressed={selectedStore === store} onClick={() => setSelectedStore(store)} className={`rounded border px-2.5 py-1 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-50 ${selectedStore === store ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-300 bg-white text-slate-600'}`}>{store}</button>)}
+            </div>
           </div>
           {products.length > 0 && <div className="flex flex-wrap items-center gap-2">
               {products.length > 0 && (
