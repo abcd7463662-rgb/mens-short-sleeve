@@ -238,7 +238,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           id: it.id,
           rowIndex: it.rowIndex,
           title: cleanedTitle,
-          englishTitle: it.englishTitle,
+          englishTitle: it.englishTitle ? cleanEnglishTitle(it.englishTitle) : undefined,
           imageUrl: it.imageUrl,
           blackUrl: it.blackUrl || it.imageUrl,
           whiteUrl: it.whiteUrl || '',
@@ -298,18 +298,18 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     setTranslationProgress({ done: 0, total: uniqueTitleCount, failed: 0 });
     onShowToast(`正在翻译 ${needsTranslation.length} 条商品标题，请稍候...`, 'info');
     try {
-      const titles = needsTranslation.map((it) => it.title);
+      const titles = needsTranslation.map((it) => cleanChineseTitle(it.title));
       const translations = await translateBatchTitlesWithGoogle(titles, 'en', (done, total) => {
         setTranslationProgress((prev) => ({ done, total, failed: prev?.failed || 0 }));
       });
       const translationMap = new Map<string, string>();
-      titles.forEach((t, i) => {
-        if (translations[i]) translationMap.set(t, translations[i]);
+      titles.forEach((title, i) => {
+        if (translations[i]) translationMap.set(title, translations[i]);
       });
 
       setProducts((prev) =>
         prev.map((it) => {
-          const translated = translationMap.get(it.title);
+          const translated = translationMap.get(cleanChineseTitle(it.title));
           if (translated) {
             return {
               ...it,
@@ -320,7 +320,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         })
       );
 
-      const doneCount = needsTranslation.filter((it) => translationMap.has(it.title)).length;
+      const doneCount = needsTranslation.filter((it) => translationMap.has(cleanChineseTitle(it.title))).length;
       const missingCount = needsTranslation.length - doneCount;
       setTranslationProgress({ done: needsTranslation.length, total: needsTranslation.length, failed: missingCount });
       if (missingCount > 0) {

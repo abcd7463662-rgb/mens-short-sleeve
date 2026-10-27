@@ -542,16 +542,17 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     try {
       const titles = list.map((p) => cleanChineseTitle(p.title || ''));
       const translated = await translateBatchTitlesWithGoogle(titles, 'en');
+      const translationById = new Map(list.map((item, index) => [item.id, cleanEnglishTitle(translated[index] || titles[index])]));
 
       setProducts((prev) =>
-        prev.map((item, index) => {
+        prev.map((item) => {
+          const translation = translationById.get(item.id);
+          if (!translation) return item;
           const cleanedCn = cleanChineseTitle(item.title);
-          const rawTrans = translated[index] || cleanedCn;
-          const cleanedEn = cleanEnglishTitle(rawTrans);
           return {
             ...item,
             title: cleanedCn || item.title,
-            englishTitle: cleanedEn,
+            englishTitle: translation,
             isTranslating: false,
           };
         })

@@ -24,6 +24,62 @@ export interface CategoryTemplateInfo {
 const categoryUrl = (category: ApparelTemplateCategory, endpoint = '/api/category-template') =>
   endpoint + '?category=' + encodeURIComponent(category);
 
+const TEMPLATE_CACHE_DB = 'apparel-category-template-cache';
+const TEMPLATE_CACHE_STORE = 'templates';
+interface CachedCategoryTemplate {
+  file: Blob;
+  name: string;
+  savedAt?: string;
+  size: number;
+}
+
+function openTemplateCache(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(TEMPLATE_CACHE_DB, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(TEMPLATE_CACHE_STORE)) request.result.createObjectStore(TEMPLATE_CACHE_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('打开模板缓存失败'));
+  });
+}
+
+async function readCachedTemplate(category: ApparelTemplateCategory): Promise<CachedCategoryTemplate | null> {
+  if (typeof indexedDB === 'undefined') return null;
+  const db = await openTemplateCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TEMPLATE_CACHE_STORE, 'readonly');
+    const request = tx.objectStore(TEMPLATE_CACHE_STORE).get(category);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error('读取模板缓存失败'));
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => { db.close(); reject(tx.error || new Error('读取模板缓存失败')); };
+  });
+}
+
+async function writeCachedTemplate(category: ApparelTemplateCategory, record: CachedCategoryTemplate): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const db = await openTemplateCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TEMPLATE_CACHE_STORE, 'readwrite');
+    tx.objectStore(TEMPLATE_CACHE_STORE).put(record, category);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error('保存模板缓存失败')); };
+    tx.onabort = () => { db.close(); reject(tx.error || new Error('保存模板缓存失败')); };
+  });
+}
+
+async function deleteCachedTemplate(category: ApparelTemplateCategory): Promise<void> {
+  if (typeof indexedDB === 'undefined') return;
+  const db = await openTemplateCache();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(TEMPLATE_CACHE_STORE, 'readwrite');
+    tx.objectStore(TEMPLATE_CACHE_STORE).delete(category);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { db.close(); reject(tx.error || new Error('删除模板缓存失败')); };
+  });
+}
+
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -46,6 +102,8 @@ export async function saveCategoryTemplateFile(file: File, category: ApparelTemp
     body: JSON.stringify({ fileBase64: await readFileAsBase64(file), filename: file.name }),
   });
   if (!response.ok) throw new Error(await getError(response, '模板未能保存到腾讯云'));
+  const saved = await response.json() as CategoryTemplateInfo;
+  await writeCachedTemplate(category, { file: file.slice(0, file.size, TEMPLATE_TYPE), name: file.name, size: file.size, savedAt: saved.savedAt }).catch(() => {});
 }
 
 export async function loadCategoryTemplateFile(
@@ -53,11 +111,34 @@ export async function loadCategoryTemplateFile(
   onInfo?: (info: CategoryTemplateInfo) => void,
   onProgress?: (loaded: number, total: number | null) => void
 ): Promise<{ file: File; info: CategoryTemplateInfo } | null> {
-  const infoResponse = await fetch(categoryUrl(category), { cache: 'no-store' });
+  let infoResponse: Response;
+  try {
+    infoResponse = await fetch(categoryUrl(category), { cache: 'no-store' });
+  } catch (error) {
+    const cached = await readCachedTemplate(category).catch(() => null);
+    if (cached) {
+      const info: CategoryTemplateInfo = { exists: true, name: cached.name, savedAt: cached.savedAt, size: cached.size };
+      onInfo?.(info);
+      onProgress?.(cached.size, cached.size);
+      return { file: new File([cached.file], cached.name, { type: TEMPLATE_TYPE }), info };
+    }
+    throw error;
+  }
   if (!infoResponse.ok) throw new Error(await getError(infoResponse, '读取腾讯云模板状态失败'));
   const info = await infoResponse.json() as CategoryTemplateInfo;
   if (!info.exists) return null;
   onInfo?.(info);
+
+  try {
+    const cached = await readCachedTemplate(category);
+    if (cached && cached.name === info.name && cached.size === info.size && cached.savedAt === info.savedAt) {
+      const file = new File([cached.file], cached.name, { type: TEMPLATE_TYPE });
+      onProgress?.(cached.size, cached.size);
+      return { file, info };
+    }
+  } catch {
+    // A browser cache failure should fall through to the permanent COS copy.
+  }
 
   const fileResponse = await fetch(categoryUrl(category, '/api/category-template/file'), { cache: 'no-store' });
   if (!fileResponse.ok) throw new Error(await getError(fileResponse, '读取腾讯云模板文件失败'));
@@ -65,7 +146,9 @@ export async function loadCategoryTemplateFile(
   if (!fileResponse.body) {
     const blob = await fileResponse.blob();
     onProgress?.(blob.size, totalHeader || blob.size);
-    return { file: new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE }), info };
+    const file = new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE });
+    void writeCachedTemplate(category, { file: blob, name: file.name, savedAt: info.savedAt, size: blob.size }).catch(() => {});
+    return { file, info };
   }
 
   const reader = fileResponse.body.getReader();
@@ -80,10 +163,13 @@ export async function loadCategoryTemplateFile(
     onProgress?.(loaded, totalHeader || null);
   }
   const blob = new Blob(chunks, { type: TEMPLATE_TYPE });
-  return { file: new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE }), info };
+  const file = new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE });
+  void writeCachedTemplate(category, { file: blob, name: file.name, savedAt: info.savedAt, size: blob.size }).catch(() => {});
+  return { file, info };
 }
 
 export async function deleteCategoryTemplateFile(category: ApparelTemplateCategory): Promise<void> {
   const response = await fetch(categoryUrl(category), { method: 'DELETE' });
   if (!response.ok) throw new Error(await getError(response, '删除腾讯云模板失败'));
+  await deleteCachedTemplate(category).catch(() => {});
 }

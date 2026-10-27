@@ -9,6 +9,40 @@ import {
   ProductTemplateInput,
 } from './rules';
 
+const parsedTemplateModels = new WeakMap<File, Promise<any>>();
+const templateBuffers = new WeakMap<File, Promise<ArrayBuffer>>();
+
+function getTemplateBuffer(file: File): Promise<ArrayBuffer> {
+  let bufferPromise = templateBuffers.get(file);
+  if (!bufferPromise) {
+    bufferPromise = file.arrayBuffer();
+    templateBuffers.set(file, bufferPromise);
+  }
+  return bufferPromise;
+}
+
+async function loadTemplateWorkbook(file: File, arrayBuffer: ArrayBuffer): Promise<ExcelJS.Workbook> {
+  let modelPromise = parsedTemplateModels.get(file);
+  if (!modelPromise) {
+    modelPromise = (async () => {
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(arrayBuffer);
+      return workbook.model;
+    })();
+    parsedTemplateModels.set(file, modelPromise);
+  }
+
+  try {
+    const model = await modelPromise;
+    const workbook = new ExcelJS.Workbook();
+    workbook.model = structuredClone(model);
+    return workbook;
+  } catch (error) {
+    parsedTemplateModels.delete(file);
+    throw error;
+  }
+}
+
 export interface SavedTemplateField {
   id: string;
   label: string;
@@ -149,11 +183,10 @@ export async function executeTemplateGeneration(
   targetSheetIdx?: number,
   customRules: CellRule[] = TEMPLATE_RULES
 ): Promise<TemplateResult> {
-  const arrayBuffer = await file.arrayBuffer();
+  const arrayBuffer = await getTemplateBuffer(file);
 
   try {
-    const workbook = new ExcelJS.Workbook();
-    await workbook.xlsx.load(arrayBuffer);
+    const workbook = await loadTemplateWorkbook(file, arrayBuffer);
 
     if (!workbook.worksheets || workbook.worksheets.length === 0) {
       throw new Error('工作簿中未包含有效的工作表');
