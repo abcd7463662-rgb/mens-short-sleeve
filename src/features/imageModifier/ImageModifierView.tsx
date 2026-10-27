@@ -95,6 +95,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templateSavedAt, setTemplateSavedAt] = useState<number | null>(null);
+  const [templateInfo, setTemplateInfo] = useState<{ name?: string; size?: number } | null>(null);
+  const [templateLoadProgress, setTemplateLoadProgress] = useState<{ loaded: number; total: number | null } | null>(null);
+  const [templateLoadError, setTemplateLoadError] = useState('');
   const [isTemplateUploading, setIsTemplateUploading] = useState(false);
 
   // 3. 处理与导出状态
@@ -371,13 +374,20 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 页面打开时自动读取男士短袖类目的永久底表
   useEffect(() => {
     let cancelled = false;
-    loadCategoryTemplateFile('men-tee').then((saved) => {
+    setTemplateInfo(null);
+    setTemplateLoadProgress(null);
+    setTemplateLoadError('');
+    loadCategoryTemplateFile('men-tee', (info) => { if (!cancelled) setTemplateInfo(info); }, (loaded, total) => { if (!cancelled) setTemplateLoadProgress({ loaded, total }); }).then((saved) => {
       if (!cancelled) {
         setTemplateFile(saved?.file || null);
         setTemplateSavedAt(saved?.info.savedAt ? Date.parse(saved.info.savedAt) : null);
+        setTemplateLoadProgress(null);
       }
     }).catch((error) => {
-      if (!cancelled) onShowToast(error instanceof Error ? error.message : '读取男士短袖腾讯云模板失败', 'error');
+      if (!cancelled) {
+        setTemplateLoadProgress(null);
+        setTemplateLoadError(error instanceof Error ? error.message : '读取男士短袖腾讯云模板失败');
+      }
     });
 
     return () => {
@@ -854,12 +864,23 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <div className="flex items-center gap-2">
                   <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {templateFile ? '腾讯云已保存' : '需要上传底表'}
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${templateFile ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : templateInfo || templateLoadProgress ? 'bg-blue-50 text-blue-700 border-blue-200' : templateLoadError ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>
+                  {templateFile ? '读取完成' : templateInfo || templateLoadProgress ? '正在读取' : templateLoadError ? '读取失败' : '需要上传底表'}
                 </span>
               </div>
 
               {/* 模板操作区 */}
+              {templateLoadProgress && (
+                <div className="space-y-1.5" role="status" aria-live="polite">
+                  <div className="flex items-center justify-between gap-3 text-[11px] text-slate-600">
+                    <span className="truncate">正在读取：{templateInfo?.name || '男士短袖模板'}</span>
+                    <span className="shrink-0">{templateLoadProgress.total ? Math.min(100, Math.round(templateLoadProgress.loaded / templateLoadProgress.total * 100)) + '%' : Math.round(templateLoadProgress.loaded / 1024) + ' KB'}</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width] duration-150" style={{ width: templateLoadProgress.total ? Math.min(100, templateLoadProgress.loaded / templateLoadProgress.total * 100) + '%' : '35%' }} /></div>
+                </div>
+              )}
+              {templateLoadError && !templateFile && <p className="text-xs text-rose-700" role="alert">模板读取失败：{templateLoadError}</p>}
+
               {templateFile ? (
                 <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 truncate">
@@ -874,7 +895,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                               hour: '2-digit',
                               minute: '2-digit',
                             })} 保存`
-                          : '已从腾讯云自动读取'}
+                          : '已从腾讯云读取完成'}
                       </p>
                     </div>
                   </div>

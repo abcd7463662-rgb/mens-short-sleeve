@@ -48,15 +48,38 @@ export async function saveCategoryTemplateFile(file: File, category: ApparelTemp
   if (!response.ok) throw new Error(await getError(response, '模板未能保存到腾讯云'));
 }
 
-export async function loadCategoryTemplateFile(category: ApparelTemplateCategory): Promise<{ file: File; info: CategoryTemplateInfo } | null> {
+export async function loadCategoryTemplateFile(
+  category: ApparelTemplateCategory,
+  onInfo?: (info: CategoryTemplateInfo) => void,
+  onProgress?: (loaded: number, total: number | null) => void
+): Promise<{ file: File; info: CategoryTemplateInfo } | null> {
   const infoResponse = await fetch(categoryUrl(category), { cache: 'no-store' });
   if (!infoResponse.ok) throw new Error(await getError(infoResponse, '读取腾讯云模板状态失败'));
   const info = await infoResponse.json() as CategoryTemplateInfo;
   if (!info.exists) return null;
+  onInfo?.(info);
 
   const fileResponse = await fetch(categoryUrl(category, '/api/category-template/file'), { cache: 'no-store' });
   if (!fileResponse.ok) throw new Error(await getError(fileResponse, '读取腾讯云模板文件失败'));
-  const blob = await fileResponse.blob();
+  const totalHeader = Number(fileResponse.headers.get('Content-Length')) || info.size || 0;
+  if (!fileResponse.body) {
+    const blob = await fileResponse.blob();
+    onProgress?.(blob.size, totalHeader || blob.size);
+    return { file: new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE }), info };
+  }
+
+  const reader = fileResponse.body.getReader();
+  const chunks: ArrayBuffer[] = [];
+  let loaded = 0;
+  onProgress?.(0, totalHeader || null);
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(Uint8Array.from(value).buffer);
+    loaded += value.byteLength;
+    onProgress?.(loaded, totalHeader || null);
+  }
+  const blob = new Blob(chunks, { type: TEMPLATE_TYPE });
   return { file: new File([blob], info.name || category + '-template.xlsx', { type: TEMPLATE_TYPE }), info };
 }
 

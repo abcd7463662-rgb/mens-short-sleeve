@@ -4,6 +4,10 @@ import {
   type WomenProductCategory,
 } from '../../utils/categoryTemplateStorage';
 
-export async function loadWomenCategoryTemplateFile(category: WomenProductCategory): Promise<{ file: File; info: CategoryTemplateInfo } | null> {
-  return loadCategoryTemplateFile(category);
+export async function loadWomenCategoryTemplateFile(
+  category: WomenProductCategory,
+  onInfo?: (info: CategoryTemplateInfo) => void,
+  onProgress?: (loaded: number, total: number | null) => void
+): Promise<{ file: File; info: CategoryTemplateInfo } | null> {
+  return loadCategoryTemplateFile(category, onInfo, onProgress);
 }

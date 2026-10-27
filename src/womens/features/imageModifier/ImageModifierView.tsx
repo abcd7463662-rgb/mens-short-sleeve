@@ -201,6 +201,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [loadedTemplateCategory, setLoadedTemplateCategory] = useState<WomenProductCategory | null>(null);
+  const [templateInfo, setTemplateInfo] = useState<{ name?: string; size?: number } | null>(null);
+  const [templateLoadProgress, setTemplateLoadProgress] = useState<{ loaded: number; total: number | null } | null>(null);
+  const [templateLoadError, setTemplateLoadError] = useState('');
   useEffect(() => {
     if (initialCategory && initialCategory !== productCategory) {
       setTemplateFile(null);
@@ -214,13 +217,21 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     let cancelled = false;
     setTemplateFile(null);
     setLoadedTemplateCategory(null);
-    loadTemplateFile(productCategory).then((saved) => {
+    setTemplateInfo(null);
+    setTemplateLoadProgress(null);
+    setTemplateLoadError('');
+    loadTemplateFile(productCategory, (info) => { if (!cancelled) setTemplateInfo(info); }, (loaded, total) => { if (!cancelled) setTemplateLoadProgress({ loaded, total }); }).then((saved) => {
       if (!cancelled) {
         setTemplateFile(saved?.file || null);
         setLoadedTemplateCategory(saved ? productCategory : null);
+        setTemplateLoadProgress(null);
       }
     }).catch((error) => {
-      if (!cancelled) console.warn('读取类目腾讯云模板失败:', error);
+      if (!cancelled) {
+        console.warn('读取类目腾讯云模板失败:', error);
+        setTemplateLoadProgress(null);
+        setTemplateLoadError(error instanceof Error ? error.message : '读取模板失败');
+      }
     });
     return () => { cancelled = true; };
   }, [productCategory]);
@@ -1558,20 +1569,31 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
                 <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${templateFile && loadedTemplateCategory === productCategory ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>
-                  {templateFile && loadedTemplateCategory === productCategory ? '腾讯云已保存' : '需要上传底表'}
+                  {templateFile && loadedTemplateCategory === productCategory ? '读取完成' : templateInfo || templateLoadProgress ? '正在读取' : templateLoadError ? '读取失败' : '需要上传底表'}
                 </span>
               </div>
 
               <p className="text-xs text-slate-500">当前类目：{activeCategory.label}。写入位置由程序预设，底表按类目分别保存在腾讯云。</p>
 
               {/* 模板操作区 */}
+              {templateLoadProgress && (
+                <div className="space-y-1.5" role="status" aria-live="polite">
+                  <div className="flex items-center justify-between gap-3 text-[11px] text-slate-600">
+                    <span className="truncate">正在读取：{templateInfo?.name || activeCategory.label + '模板'}</span>
+                    <span className="shrink-0">{templateLoadProgress.total ? Math.min(100, Math.round(templateLoadProgress.loaded / templateLoadProgress.total * 100)) + '%' : Math.round(templateLoadProgress.loaded / 1024) + ' KB'}</span>
+                  </div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-slate-200"><div className="h-full rounded-full bg-blue-600 transition-[width] duration-150" style={{ width: templateLoadProgress.total ? Math.min(100, templateLoadProgress.loaded / templateLoadProgress.total * 100) + '%' : '35%' }} /></div>
+                </div>
+              )}
+              {templateLoadError && !templateFile && <p className="text-xs text-rose-700" role="alert">模板读取失败：{templateLoadError}</p>}
+
               {templateFile ? (
                 <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 truncate">
                     <FileSpreadsheet className="w-5 h-5 text-purple-600 shrink-0" />
                     <div className="truncate">
                       <p className="text-xs font-bold text-slate-800 truncate">{templateFile.name}</p>
-                      <p className="text-[11px] text-slate-500">{loadedTemplateCategory === productCategory ? '此类目模板已载入并保存' : '模板加载中'}</p>
+                      <p className="text-[11px] text-slate-500">{loadedTemplateCategory === productCategory ? '已从腾讯云读取完成' : '模板加载中'}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
