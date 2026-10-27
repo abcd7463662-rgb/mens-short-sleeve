@@ -1533,9 +1533,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 className="inline-flex items-center gap-2 rounded border border-amber-300 bg-white px-3 py-2 text-xs font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
               >
                 {isRepairingSportWorkbook ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileSpreadsheet className="h-3.5 w-3.5" />}
-                {isRepairingSportWorkbook ? '正在修正...' : '上传 0XL–5XL 旧表并修正'}
+                {isRepairingSportWorkbook ? '正在修正...' : '上传旧表并统一修正尺码'}
               </button>
-              <span className="text-xs text-amber-800">修正为 S、M、L、XL、XXL，并删除每款多出的两行 SKU。</span>
+              <span className="text-xs text-amber-800">尺码名称不限；按商品区结构修正为 S、M、L、XL、XXL，必要时删除多余 SKU 行。</span>
             </div>
           </details>
         )}
