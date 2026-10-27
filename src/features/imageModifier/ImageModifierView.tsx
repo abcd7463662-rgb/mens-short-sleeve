@@ -47,13 +47,10 @@ import {
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
 import {
-  saveTemplateFile,
-  loadTemplateFile,
-  clearTemplateFile,
-  uploadTemplateToServer,
-  downloadTemplateFromServer,
-  deleteServerTemplate,
-} from '../../utils/templateStorage';
+  deleteCategoryTemplateFile,
+  loadCategoryTemplateFile,
+  saveCategoryTemplateFile,
+} from '../../utils/categoryTemplateStorage';
 
 export interface ProductItem {
   id: string;
@@ -98,6 +95,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [templateSavedAt, setTemplateSavedAt] = useState<number | null>(null);
+  const [isTemplateUploading, setIsTemplateUploading] = useState(false);
 
   // 3. 处理与导出状态
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
@@ -340,70 +338,47 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // --- 2. 模板导入 ---
   const handleTemplateUpload = async (file: File) => {
-    setTemplateFile(file);
-    setTemplateSavedAt(Date.now());
-    onShowToast(`正在保存上架底表「${file.name}」...`, 'info');
-
-    // 本地副本先落盘，保证服务器不可达时也能接着用
-    try {
-      await saveTemplateFile(file);
-    } catch (err) {
-      console.warn('保存模板到本机失败:', err);
+    if (!/\.xlsx$/i.test(file.name)) {
+      onShowToast('只支持 .xlsx 格式的男士短袖模板', 'error');
+      return;
     }
-
-    const serverResult = await uploadTemplateToServer(file);
-    if (serverResult) {
-      onShowToast(
-        serverResult.backedUp
-          ? `底表「${file.name}」已永久保存到 GitHub，换设备、重新部署都不会丢`
-          : serverResult.backupConfigured
-          ? `底表「${file.name}」已保存，但 GitHub 备份失败，可稍后重新上传一次`
-          : `底表「${file.name}」已保存到服务器。当前未配置 GitHub 备份，重新部署后仍在，需要长期保存请按说明配置`,
-        'success'
-      );
-    } else {
-      onShowToast(
-        `底表「${file.name}」已保存在本机，但未能同步到服务器，下次打开仍可使用`,
-        'error'
-      );
+    setIsTemplateUploading(true);
+    onShowToast('正在将「' + file.name + '」永久保存到腾讯云...', 'info');
+    try {
+      await saveCategoryTemplateFile(file, 'men-tee');
+      setTemplateFile(file);
+      setTemplateSavedAt(Date.now());
+      onShowToast('「' + file.name + '」已永久保存到男士短袖模板槽位，下次进入会自动读取。', 'success');
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : '模板保存到腾讯云失败', 'error');
+    } finally {
+      setIsTemplateUploading(false);
+      if (templateInputRef.current) templateInputRef.current.value = '';
     }
   };
 
   const handleResetTemplate = async () => {
-    setTemplateFile(null);
-    setTemplateSavedAt(null);
-    await clearTemplateFile();
-    await deleteServerTemplate();
-    onShowToast('已重置为系统内置标准模板，本机、服务器与 GitHub 备份均已清除', 'info');
+    try {
+      await deleteCategoryTemplateFile('men-tee');
+      setTemplateFile(null);
+      setTemplateSavedAt(null);
+      onShowToast('男士短袖腾讯云模板已删除，请上传新的底表后再导出。', 'success');
+    } catch (err) {
+      onShowToast(err instanceof Error ? err.message : '删除腾讯云模板失败', 'error');
+    }
   };
 
-  // 页面打开时恢复上次保存的底表
+  // 页面打开时自动读取男士短袖类目的永久底表
   useEffect(() => {
     let cancelled = false;
-
-    (async () => {
-      // 优先用服务器上的版本，这样换浏览器/换电脑也能自动拿到
-      const fromServer = await downloadTemplateFromServer();
-      if (cancelled) return;
-      if (fromServer) {
-        setTemplateFile((prev) => prev ?? fromServer);
-        setTemplateSavedAt((prev) => prev ?? Date.now());
-        // 顺手刷新本地副本，保证和服务端一致
-        saveTemplateFile(fromServer).catch(() => undefined);
-        return;
+    loadCategoryTemplateFile('men-tee').then((saved) => {
+      if (!cancelled) {
+        setTemplateFile(saved?.file || null);
+        setTemplateSavedAt(saved?.info.savedAt ? Date.parse(saved.info.savedAt) : null);
       }
-
-      const local = await loadTemplateFile();
-      if (cancelled || !local) return;
-      setTemplateFile((prev) => prev ?? local.file);
-      setTemplateSavedAt((prev) => prev ?? local.savedAt);
-
-      // 服务端没有（例如刚重新部署过），用本地副本自动补回去
-      const healed = await uploadTemplateToServer(local.file);
-      if (!cancelled && healed) {
-        onShowToast('已从本机备份自动恢复上架底表到服务器', 'success');
-      }
-    })();
+    }).catch((error) => {
+      if (!cancelled) onShowToast(error instanceof Error ? error.message : '读取男士短袖腾讯云模板失败', 'error');
+    });
 
     return () => {
       cancelled = true;
@@ -434,6 +409,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出单款商品模板
   const handleExportSingle = async (item: ProductItem, index: number) => {
+    if (!templateFile) {
+      onShowToast('请先上传并保存男士短袖上架模板。', 'error');
+      return;
+    }
     try {
       const cleanedTitle = cleanChineseTitle(item.title);
       const cleanedEnglish = cleanEnglishTitle(item.englishTitle || cleanedTitle);
@@ -464,6 +443,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出全部商品整合在同一个表格内 (标准上架模板)
   const handleExportCombined = async () => {
+    if (!templateFile) {
+      onShowToast('请先上传并保存男士短袖上架模板。', 'error');
+      return;
+    }
     if (products.length === 0) {
       onShowToast('请先在第 1 步导入商品信息', 'error');
       return;
@@ -872,7 +855,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
                 <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {templateFile ? '自定义底表' : '系统内置标准模板'}
+                  {templateFile ? '腾讯云已保存' : '需要上传底表'}
                 </span>
               </div>
 
@@ -891,7 +874,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                               hour: '2-digit',
                               minute: '2-digit',
                             })} 保存`
-                          : '已载入系统底表'}
+                          : '已从腾讯云自动读取'}
                       </p>
                     </div>
                   </div>
@@ -899,9 +882,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     <button
                       type="button"
                       onClick={() => templateInputRef.current?.click()}
+                      disabled={isTemplateUploading}
                       className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer"
                     >
-                      更换
+                      {isTemplateUploading ? '保存中...' : '更换'}
                     </button>
                     <button
                       type="button"
@@ -916,17 +900,18 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               ) : (
                 <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 truncate">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <Upload className="w-5 h-5 text-blue-600 shrink-0" />
                     <div>
-                      <p className="text-xs font-medium text-slate-800">使用系统标准模板</p>
+                      <p className="text-xs font-medium text-slate-800">尚未保存男士短袖底表</p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => templateInputRef.current?.click()}
+                    disabled={isTemplateUploading}
                     className="shrink-0 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
                   >
-                    上传自定义底表
+                    {isTemplateUploading ? '正在保存...' : '上传并永久保存底表'}
                   </button>
                 </div>
               )}

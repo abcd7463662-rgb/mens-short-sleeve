@@ -407,6 +407,137 @@ async function startServer() {
     });
   });
 
+  const CATEGORY_TEMPLATE_CATEGORIES = [
+    'men-tee',
+    'womens-plus-tee',
+    'womens-standard-tee',
+    'womens-sport-tee',
+  ] as const;
+  const resolveCategoryTemplate = (value: unknown) =>
+    typeof value === 'string' && CATEGORY_TEMPLATE_CATEGORIES.includes(value as (typeof CATEGORY_TEMPLATE_CATEGORIES)[number])
+      ? value
+      : null;
+  const categoryTemplateCosSettings = () => ({
+    secretId: process.env.TENCENT_COS_SECRET_ID || '',
+    secretKey: process.env.TENCENT_COS_SECRET_KEY || '',
+    bucket: String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim(),
+    region: String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim(),
+  });
+  const categoryTemplateKeys = (category: string) => ({
+    file: 'templates/category-defaults/' + category + '/template.xlsx',
+    meta: 'templates/category-defaults/' + category + '/meta.json',
+  });
+  const getCategoryTemplateCos = async () => {
+    const settings = categoryTemplateCosSettings();
+    if (!settings.secretId || !settings.secretKey || !settings.bucket) {
+      throw new Error('腾讯云 COS 环境变量未配置');
+    }
+    const COS = (await import('cos-nodejs-sdk-v5')).default;
+    return { cos: new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey }), settings };
+  };
+  const cosGetObject = (cos: any, settings: ReturnType<typeof categoryTemplateCosSettings>, Key: string) =>
+    new Promise<Buffer | null>((resolve, reject) => cos.getObject(
+      { Bucket: settings.bucket, Region: settings.region, Key },
+      (err: any, data: any) => {
+        if (err?.statusCode === 404 || err?.code === 'NoSuchKey') { resolve(null); return; }
+        if (err) { reject(err); return; }
+        resolve(!data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body));
+      }
+    ));
+  const cosHeadObject = (cos: any, settings: ReturnType<typeof categoryTemplateCosSettings>, Key: string) =>
+    new Promise<boolean>((resolve, reject) => cos.headObject(
+      { Bucket: settings.bucket, Region: settings.region, Key },
+      (err: any) => {
+        if (err?.statusCode === 404 || err?.code === 'NoSuchKey') { resolve(false); return; }
+        if (err) { reject(err); return; }
+        resolve(true);
+      }
+    ));
+
+  app.get('/api/category-template', async (req, res) => {
+    const category = resolveCategoryTemplate(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    try {
+      const { cos, settings } = await getCategoryTemplateCos();
+      const keys = categoryTemplateKeys(category);
+      const [metaBuffer, fileExists] = await Promise.all([
+        cosGetObject(cos, settings, keys.meta),
+        cosHeadObject(cos, settings, keys.file),
+      ]);
+      if (!metaBuffer || !fileExists) { res.json({ exists: false }); return; }
+      const meta = JSON.parse(metaBuffer.toString('utf8'));
+      res.json({ exists: true, name: meta.name || category + '-template.xlsx', savedAt: meta.savedAt, size: meta.size });
+    } catch (error: any) {
+      res.status(503).json({ error: error.message || '读取腾讯云模板失败' });
+    }
+  });
+
+  app.get('/api/category-template/file', async (req, res) => {
+    const category = resolveCategoryTemplate(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    try {
+      const { cos, settings } = await getCategoryTemplateCos();
+      const keys = categoryTemplateKeys(category);
+      const [file, metaBuffer] = await Promise.all([
+        cosGetObject(cos, settings, keys.file),
+        cosGetObject(cos, settings, keys.meta),
+      ]);
+      if (!file || !metaBuffer) { res.status(404).json({ error: '该类目尚未保存上架模板' }); return; }
+      const meta = JSON.parse(metaBuffer.toString('utf8'));
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="' + encodeURIComponent(meta.name || category + '-template.xlsx') + '"');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(file);
+    } catch (error: any) {
+      res.status(503).json({ error: error.message || '读取腾讯云模板失败' });
+    }
+  });
+
+  app.post('/api/category-template', async (req, res) => {
+    const category = resolveCategoryTemplate(req.query.category || req.body?.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    const { fileBase64, filename } = req.body || {};
+    if (typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '缺少模板文件数据' }); return; }
+    const safeName = path.basename(String(filename || 'template.xlsx'));
+    if (!/\.xlsx$/i.test(safeName)) { res.status(400).json({ error: '模板必须为 .xlsx 格式' }); return; }
+    const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+    if (!buffer.length || buffer.length > 35 * 1024 * 1024 || buffer[0] !== 0x50 || buffer[1] !== 0x4b) {
+      res.status(400).json({ error: '模板文件无效、为空或超过 35 MB' }); return;
+    }
+    try {
+      const { cos, settings } = await getCategoryTemplateCos();
+      const keys = categoryTemplateKeys(category);
+      const savedAt = new Date().toISOString();
+      const meta = Buffer.from(JSON.stringify({ name: safeName, savedAt, size: buffer.length }), 'utf8');
+      const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject(
+        { Bucket: settings.bucket, Region: settings.region, Key, Body, ContentType },
+        (error: any) => error ? reject(error) : resolve()
+      ));
+      await put(keys.file, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      await put(keys.meta, meta, 'application/json; charset=utf-8');
+      res.json({ success: true, permanent: true, name: safeName, size: buffer.length, savedAt });
+    } catch (error: any) {
+      res.status(502).json({ error: error.message || '模板保存到腾讯云失败' });
+    }
+  });
+
+  app.delete('/api/category-template', async (req, res) => {
+    const category = resolveCategoryTemplate(req.query.category);
+    if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
+    try {
+      const { cos, settings } = await getCategoryTemplateCos();
+      const keys = categoryTemplateKeys(category);
+      const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject(
+        { Bucket: settings.bucket, Region: settings.region, Key },
+        (error: any) => error ? reject(error) : resolve()
+      ));
+      await Promise.all([remove(keys.file), remove(keys.meta)]);
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(502).json({ error: error.message || '删除腾讯云模板失败' });
+    }
+  });
+
   // --- 上架目标模板：服务端持久化 ---
   ensureTemplateDir();
   // 启动时预热：磁盘被重新部署清空的话，这里就把 GitHub 上的备份拉回来

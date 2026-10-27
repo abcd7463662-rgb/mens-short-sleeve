@@ -51,21 +51,18 @@ import {
 } from './imagePadding';
 import {
   generateProductTemplateFile,
-  generateMultiProductTemplateFile,
+  buildMultiProductTemplateRules,
   downloadTemplateFile,
   ColorKey,
   COLOR_NAMES,
-  generateMappedTemplateFile,
-  SavedTemplateConfig,
-  SavedTemplateField,
 } from '../templateGenerator';
 import { generate018SpuCode } from '../templateGenerator/rules';
 import { buildMultiProductTemplateRules as buildSportTemplateRules } from '../templateGenerator/sportRules';
+import { buildStandardTemplateRules } from '../templateGenerator/standardRules';
 import { executeTemplateGeneration } from '../templateGenerator';
-import { inspectTemplateFile } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
-import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory, deleteTemplateProfile, listTemplateProfiles, loadTemplateProfileFile, saveTemplateProfile, SavedTemplateProfile } from '../../utils/templateStorage';
+import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
 
 export interface ProductItem {
   id: string;
@@ -194,20 +191,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   });
   const activeCategory = WOMEN_PRODUCT_CATEGORIES.find((category) => category.id === productCategory)!;
   const [selectedStore, setSelectedStore] = useState<'Y店' | 'H店'>(initialCategory === 'womens-sport-tee' ? 'Y店' : 'H店');
-  const [templateProfiles, setTemplateProfiles] = useState<SavedTemplateProfile[]>([]);
-  const [activeProfileId, setActiveProfileId] = useState('');
-  const [profileMode, setProfileMode] = useState(false);
-  const [profileName, setProfileName] = useState('');
-  const [profileConfig, setProfileConfig] = useState<SavedTemplateConfig>({ name: '', targetSheetIndex: 1, startRow: 6, rowsPerProduct: 21, fields: [
-    { id: 'title', label: '中文标题', source: 'title', column: 'C', rowOffset: 0 },
-    { id: 'english', label: '英文标题', source: 'englishTitle', column: 'D', rowOffset: 0 },
-    { id: 'spu', label: 'SPU编号', source: 'spuCode', column: 'B', rowOffset: 0 },
-    { id: 'white', label: '白色图片', source: 'whiteImage', column: 'DX', rowOffset: 1 },
-    { id: 'black', label: '黑色图片', source: 'blackImage', column: 'DX', rowOffset: 2 },
-  ] });
-  const [profileFieldsOpen, setProfileFieldsOpen] = useState(false);
-  const [profileSheets, setProfileSheets] = useState<Array<{ index: number; name: string }>>([]);
-  const [profileInspection, setProfileInspection] = useState<any>(null);
+  const [isTemplateUploading, setIsTemplateUploading] = useState(false);
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
   const [tableFile, setTableFile] = useState<File | null>(null);
@@ -217,12 +201,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 2. 模板导入状态
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [loadedTemplateCategory, setLoadedTemplateCategory] = useState<WomenProductCategory | null>(null);
-  useEffect(() => { listTemplateProfiles(productCategory).then(setTemplateProfiles).catch((error) => console.warn(error)); }, [productCategory]);
-
   useEffect(() => {
     if (initialCategory && initialCategory !== productCategory) {
-      setProfileMode(false);
-      setActiveProfileId('');
       setTemplateFile(null);
       setLoadedTemplateCategory(null);
       setProductCategory(initialCategory);
@@ -231,18 +211,19 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   }, [initialCategory, productCategory]);
 
   useEffect(() => {
-    if (profileMode) return;
     let cancelled = false;
     setTemplateFile(null);
     setLoadedTemplateCategory(null);
-    loadTemplateFile(productCategory).then((file) => {
+    loadTemplateFile(productCategory).then((saved) => {
       if (!cancelled) {
-        setTemplateFile(file);
-        setLoadedTemplateCategory(file ? productCategory : null);
+        setTemplateFile(saved?.file || null);
+        setLoadedTemplateCategory(saved ? productCategory : null);
       }
+    }).catch((error) => {
+      if (!cancelled) console.warn('读取类目腾讯云模板失败:', error);
     });
     return () => { cancelled = true; };
-  }, [productCategory, profileMode]);
+  }, [productCategory]);
 
   useEffect(() => {
     localStorage.setItem('WOMEN_PRODUCT_CATEGORY', productCategory);
@@ -477,7 +458,6 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   const tableInputRef = useRef<HTMLInputElement | null>(null);
   const templateInputRef = useRef<HTMLInputElement | null>(null);
-  const profileInputRef = useRef<HTMLInputElement | null>(null);
   const processingRef = useRef<boolean>(false);
   const productsRef = useRef<ProductItem[]>([]);
 
@@ -673,124 +653,35 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   };
 
   // --- 2. 模板导入 ---
-  const handleTemplateUpload = (file: File) => {
-    if (!file.name.match(/\.(xlsx|xls)$/i)) {
-      onShowToast('请选择 .xlsx 或 .xls 格式的 Excel 模板文件', 'error');
+  const handleTemplateUpload = async (file: File) => {
+    if (!file.name.match(/\.xlsx$/i)) {
+      onShowToast('只支持 .xlsx 格式的上架模板', 'error');
       return;
     }
-    setTemplateFile(file);
-    setProfileMode(false);
-    setActiveProfileId('');
-    setLoadedTemplateCategory(productCategory);
-    void saveTemplateFile(file, productCategory);
-    onShowToast(`已载入自定义模板文件：「${file.name}」`, 'success');
-    if (templateInputRef.current) templateInputRef.current.value = '';
-  };
-
-  const handleProfileUpload = async (file: File) => {
-    if (!/\.xlsx$/i.test(file.name)) { onShowToast('自定义模板档案请上传 .xlsx 格式文件，以保留工作表与原有样式', 'error'); return; }
+    setIsTemplateUploading(true);
+    onShowToast('正在将「' + file.name + '」永久保存到' + activeCategory.label + '腾讯云模板槽位...', 'info');
     try {
-      const inspection = await inspectTemplateFile(file);
-      setProfileInspection(inspection);
-      const preferredSheet = inspection.sheets.find((sheet) => sheet.name === '模版') || inspection.sheets.find((sheet) => sheet.isVisible && sheet.index > 0) || inspection.sheets[0];
-      const name = profileName.trim() || file.name.replace(/\.(xlsx|xls)$/i, '');
-      const detected = inspection.detectedLabels.filter((item) => item.sheetIndex === preferredSheet.index);
-      const config = { ...profileConfig, name, targetSheetIndex: preferredSheet.index, fields: profileConfig.fields.map((field) => {
-        const match = detected.find((item) => item.field === field.source);
-        if (!match) return field;
-        const row = Number(match.cell.match(/\d+$/)?.[0] || profileConfig.startRow);
-        return { ...field, column: match.cell.replace(/\d+$/, ''), rowOffset: Math.max(0, row - profileConfig.startRow) };
-      }) };
-      const profile: SavedTemplateProfile = { id: `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`, category: productCategory, name, filename: file.name, config, savedAt: new Date().toISOString() };
-      setTemplateProfiles((prev) => [...prev.filter((item) => item.id !== profile.id), profile]);
-      setActiveProfileId(profile.id);
-      setProfileMode(true);
-      setProfileName(name);
-      setProfileConfig(config);
-      setProfileFieldsOpen(true);
-      setProfileSheets(inspection.sheets.map(({ index, name }) => ({ index, name })));
+      await saveTemplateFile(file, productCategory);
       setTemplateFile(file);
       setLoadedTemplateCategory(productCategory);
-      onShowToast(`已识别模板「${name}」，请配置写入位置、修改模板名称后点击保存。`, 'success');
-    } catch (error: any) { onShowToast(error.message || '模板读取或保存失败', 'error'); }
-    finally { if (profileInputRef.current) profileInputRef.current.value = ''; }
+      onShowToast('「' + file.name + '」已永久保存到' + activeCategory.label + '，下次进入会自动读取。', 'success');
+    } catch (error: any) {
+      onShowToast(error.message || '模板保存到腾讯云失败', 'error');
+    } finally {
+      setIsTemplateUploading(false);
+      if (templateInputRef.current) templateInputRef.current.value = '';
+    }
   };
 
-  const handleSelectProfile = async (id: string) => {
-    const profile = templateProfiles.find((item) => item.id === id);
-    if (!profile) { setActiveProfileId(''); return; }
+  const handleResetTemplate = async () => {
     try {
-      const file = await loadTemplateProfileFile(profile);
-      const inspection = await inspectTemplateFile(file);
-      setProfileInspection(inspection);
-      setProfileSheets(inspection.sheets.map(({ index, name }) => ({ index, name })));
-      setTemplateFile(file);
-      setLoadedTemplateCategory(productCategory);
-      setActiveProfileId(profile.id);
-      setProfileMode(true);
-      setProfileName(profile.name);
-      setProfileConfig(profile.config);
-      onShowToast(`已载入「${profile.name}」模板`, 'success');
-    } catch (error: any) { onShowToast(error.message || '加载模板失败', 'error'); }
-  };
-
-  const handleSaveProfileConfig = async () => {
-    if (!activeProfileId || !templateFile) return;
-    const name = profileName.trim();
-    if (!name) { onShowToast('请填写模板名称', 'error'); return; }
-    const config = { ...profileConfig, name };
-    const profile: SavedTemplateProfile = { id: activeProfileId, category: productCategory, name, filename: templateFile.name, config, savedAt: new Date().toISOString() };
-    try {
-      await saveTemplateProfile(templateFile, profile);
-      setProfileConfig(config);
-      setTemplateProfiles((prev) => prev.map((item) => item.id === profile.id ? profile : item));
-      onShowToast(`「${name}」写入位置已永久保存`, 'success');
-    } catch (error: any) { onShowToast(error.message || '配置保存失败', 'error'); }
-  };
-
-  const updateProfileField = (id: string, updates: Partial<SavedTemplateField>) => {
-    setProfileConfig((prev) => ({ ...prev, fields: prev.fields.map((field) => field.id === id ? { ...field, ...updates } : field) }));
-  };
-
-  const applyDetectedLabel = (fieldId: string, cell: string) => {
-    const row = Number(cell.match(/\d+$/)?.[0] || profileConfig.startRow);
-    const column = cell.replace(/\d+$/, '');
-    updateProfileField(fieldId, { column, rowOffset: Math.max(0, row - profileConfig.startRow) });
-    onShowToast(`已将字段定位到 ${cell}，请确认后保存规则`, 'info');
-  };
-
-  const addProfileField = () => {
-    const id = `field_${Date.now()}`;
-    const field: SavedTemplateField = { id, label: '新字段', source: 'title', column: 'A', rowOffset: 0, repeatCount: 1, rowStep: 1 };
-    setProfileConfig((prev) => ({ ...prev, fields: [...prev.fields, field] }));
-  };
-
-  const handleDeleteProfile = async () => {
-    if (!activeProfileId || !window.confirm(`确定永久删除模板「${profileName}」吗？`)) return;
-    try {
-      await deleteTemplateProfile(activeProfileId, productCategory);
-      setTemplateProfiles((prev) => prev.filter((profile) => profile.id !== activeProfileId));
-      setActiveProfileId('');
-      setProfileMode(false);
-      setTemplateFile(null);
-      setProfileName('');
-      onShowToast('模板档案已删除', 'success');
-    } catch (error: any) { onShowToast(error.message || '删除模板失败', 'error'); }
-  };
-
-  const handleResetTemplate = () => {
-    if (profileMode) {
-      setActiveProfileId('');
-      setProfileMode(false);
+      await deleteTemplateFile(productCategory);
       setTemplateFile(null);
       setLoadedTemplateCategory(null);
-      onShowToast('已退出自定义模板档案', 'info');
-      return;
+      onShowToast(activeCategory.label + '腾讯云模板已删除。', 'success');
+    } catch (error: any) {
+      onShowToast(error.message || '删除腾讯云模板失败', 'error');
     }
-    setTemplateFile(null);
-    setLoadedTemplateCategory(null);
-    void deleteTemplateFile(productCategory);
-    onShowToast('已重置为系统内置标准模板', 'info');
   };
 
   // --- 3. 模板导出与 6 并发四色生图 (gpt-image-2.5 + 自动 1340*1785 白色背景填充) ---
@@ -1122,8 +1013,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出单个商品的 Excel 模板 (C6填中文标题，D6填谷歌翻译英文标题，双色黑白)
   const handleExportSingle = async (p: ProductItem, index: number) => {
-    if (!activeCategory.configured && !activeProfileId && !(productCategory === 'womens-sport-tee' && templateFile)) {
-      onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
+    if (!templateFile || loadedTemplateCategory !== productCategory) {
+      onShowToast('请先上传并保存' + activeCategory.label + '上架模板。', 'error');
       return;
     }
     try {
@@ -1167,11 +1058,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             colorOrder: p.colorOrder,
           };
       const customFilename = `${(cleanedTitle || `商品_${index + 1}`).replace(/[/\\?%*:|"<>]/g, '_')}_上架模板.xlsx`;
-      const res = activeProfileId && templateFile
-        ? await generateMappedTemplateFile({ file: templateFile, config: { ...profileConfig, name: profileName || profileConfig.name }, products: [singleProduct], filename: customFilename })
-        : productCategory === 'womens-sport-tee' && templateFile
-          ? await executeTemplateGeneration(templateFile, profileConfig.targetSheetIndex, buildSportTemplateRules([singleProduct]))
-        : await generateMultiProductTemplateFile({ products: [singleProduct], baseTemplateFile: templateFile || undefined, customFilename });
+      const rules = productCategory === 'womens-sport-tee'
+        ? buildSportTemplateRules([singleProduct])
+        : productCategory === 'womens-standard-tee'
+          ? buildStandardTemplateRules([singleProduct])
+          : buildMultiProductTemplateRules([singleProduct]);
+      const res = await executeTemplateGeneration(templateFile, 1, rules);
 
       downloadTemplateFile(res.outputBlob, res.fileName);
       void saveSourceUrlsToHStore([p]);
@@ -1195,8 +1087,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
   const handleExportCombined = async () => {
-    if (!activeCategory.configured && !activeProfileId && !(productCategory === 'womens-sport-tee' && templateFile)) {
-      onShowToast(`「${activeCategory.label}」尚未设置字段写入映射。请先配置专用映射，避免套用大码模板坐标。`, 'error');
+    if (!templateFile || loadedTemplateCategory !== productCategory) {
+      onShowToast('请先上传并保存' + activeCategory.label + '上架模板。', 'error');
       return;
     }
     if (products.length === 0) {
@@ -1264,13 +1156,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       });
 
       const exportName = products.length > 1
-        ? `${profileName || activeCategory.label}_上架模板_共${products.length}款.xlsx`
+        ? `${activeCategory.label}_上架模板_共${products.length}款.xlsx`
         : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
-      const res = activeProfileId && templateFile
-        ? await generateMappedTemplateFile({ file: templateFile, config: { ...profileConfig, name: profileName || profileConfig.name }, products: inputs, filename: exportName })
-        : productCategory === 'womens-sport-tee' && templateFile
-          ? await executeTemplateGeneration(templateFile, profileConfig.targetSheetIndex, buildSportTemplateRules(inputs))
-        : await generateMultiProductTemplateFile({ products: inputs, baseTemplateFile: templateFile || undefined, customFilename: exportName });
+      const rules = productCategory === 'womens-sport-tee'
+        ? buildSportTemplateRules(inputs)
+        : productCategory === 'womens-standard-tee'
+          ? buildStandardTemplateRules(inputs)
+          : buildMultiProductTemplateRules(inputs);
+      const res = await executeTemplateGeneration(templateFile, 1, rules);
 
       downloadTemplateFile(res.outputBlob, res.fileName);
       void saveSourceUrlsToHStore(currentProducts);
@@ -1280,9 +1173,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           ? `模板已导出；${missingImages} 个未生成或未上传到 COS 的图片链接留空，可稍后重新导出。`
           : localFolderPath.trim()
           ? `成功导出整合模板！全部 ${products.length} 款商品的 DS列 均已安全替换为本地电脑路径「${localFolderPath}」`
-          : activeProfileId
-            ? `已按「${profileName || profileConfig.name}」的自定义映射导出 ${products.length} 款商品，其他工作表保持原样。`
-            : `成功导出整合模板！已将全部 ${products.length} 款商品按随机 4 色顺序写入 EA 列，SPU 与 SKU 均已就绪。`,
+          : `成功导出整合模板！已将全部 ${products.length} 款商品按「${activeCategory.label}」预设规则写入，SPU 与 SKU 均已就绪。`,
         'success'
       );
     } catch (err: any) {
@@ -1550,14 +1441,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       <input
         ref={templateInputRef}
         type="file"
-        accept=".xlsx, .xls"
+        accept=".xlsx"
         className="hidden"
         onChange={(e) => {
           const f = e.target.files?.[0];
           if (f) handleTemplateUpload(f);
         }}
       />
-      <input ref={profileInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) void handleProfileUpload(file); }} />
 
       {/* 极简主三步工作流 */}
       <div className="space-y-5">
@@ -1667,66 +1557,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   </div>
                   <h2 className="text-sm font-semibold text-slate-900">上架目标模板</h2>
                 </div>
-                <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {templateFile ? '已保存模板' : activeCategory.configured ? '系统默认模板' : '需要配置模板'}
+                <span className={`text-xs font-semibold px-2.5 py-0.5 rounded-full border ${templateFile && loadedTemplateCategory === productCategory ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'}`}>
+                  {templateFile && loadedTemplateCategory === productCategory ? '腾讯云已保存' : '需要上传底表'}
                 </span>
               </div>
 
-              <p className="text-xs text-slate-500">当前类目：{activeCategory.label}。模板按类目分别保存，切换不会覆盖其他类目。</p>
-
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
-                <select value={activeProfileId} onChange={(event) => event.target.value ? void handleSelectProfile(event.target.value) : handleResetTemplate()} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-800">
-                  <option value="">选择已保存的自定义模板</option>
-                  {templateProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
-                </select>
-                <button type="button" onClick={() => profileInputRef.current?.click()} className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-100">
-                  <Upload className="h-3.5 w-3.5" /> 上传并新建模板
-                </button>
-              </div>
-              <input value={profileName} onChange={(event) => setProfileName(event.target.value)} placeholder="自定义模板名称，例如：女士运动短袖" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs" />
-              {activeProfileId && templateFile && (
-                <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  {false && profileInspection && <div className="rounded-lg border border-blue-200 bg-white p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div><p className="text-xs font-bold text-slate-800">模板识别结果</p><p className="text-[11px] text-slate-500">已识别 {profileInspection.sheets.length} 个子表，请选择实际填入数据的子表并配置字段位置。</p></div>
-                      <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] font-semibold text-blue-700">识别完成</span>
-                    </div>
-                    <div className="mt-2 max-h-36 space-y-1 overflow-auto">{profileInspection.sheetHeaders.map((sheet: any) => <div key={sheet.sheetIndex} className="flex items-center justify-between gap-2 rounded border border-slate-100 px-2 py-1.5 text-[11px]">
-                      <span className="font-medium text-slate-700">{sheet.sheetIndex + 1}. {sheet.sheetName}</span><span className="truncate text-slate-500">{sheet.headers.slice(0, 8).map((header: any) => header.column + '：' + header.headerName).join('；') || '未读取到表头'}</span>
-                    </div>)}
-                    {profileInspection.detectedLabels?.filter((item: any) => item.sheetIndex === profileConfig.targetSheetIndex).length > 0 && <div className="mt-2 border-t border-slate-100 pt-2"><p className="text-[11px] font-semibold text-slate-700">文字定位候选（点击即可应用）</p><div className="mt-1 flex flex-wrap gap-1">{profileInspection.detectedLabels.filter((item: any) => item.sheetIndex === profileConfig.targetSheetIndex).map((item: any) => <button key={item.cell + item.field} type="button" onClick={() => { const field = profileConfig.fields.find((candidate) => candidate.source === item.field); if (field) applyDetectedLabel(field.id, item.cell); }} className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[10px] text-blue-700 hover:bg-blue-100">{item.text} → {item.cell}</button>)}</div></div>}
-                    <p className="mt-2 text-[10px] text-slate-500">未识别或识别不准确时，可直接在下方修改目标列和行偏移；手动修改会覆盖自动定位结果。</p></div>
-                  </div>}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <label className="text-[11px] text-slate-600">写入子表<select value={profileConfig.targetSheetIndex} onChange={(event) => setProfileConfig((prev) => ({ ...prev, targetSheetIndex: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs">{profileSheets.map((sheet) => <option key={sheet.index} value={sheet.index}>{sheet.index + 1}. {sheet.name}</option>)}</select></label>
-                    <label className="text-[11px] text-slate-600">首款起始行<input type="number" min="1" value={profileConfig.startRow} onChange={(event) => setProfileConfig((prev) => ({ ...prev, startRow: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs" /></label>
-                    <label className="text-[11px] text-slate-600">每款行数<input type="number" min="1" value={profileConfig.rowsPerProduct} onChange={(event) => setProfileConfig((prev) => ({ ...prev, rowsPerProduct: Number(event.target.value) }))} className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs" /></label>
-                  </div>
-                  <button type="button" onClick={() => setProfileFieldsOpen((open) => !open)} className="text-xs font-semibold text-blue-700 hover:text-blue-900">{profileFieldsOpen ? '收起字段映射' : `编辑 ${profileConfig.fields.length} 个字段映射`}</button>
-                  {profileFieldsOpen && <div className="space-y-2">
-                    {profileConfig.fields.map((field) => <div key={field.id} className="grid grid-cols-2 lg:grid-cols-[1.1fr_1.2fr_.5fr_.6fr_auto] gap-1.5">
-                      <input aria-label="字段名称" value={field.label} onChange={(event) => updateProfileField(field.id, { label: event.target.value })} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />
-                      <select aria-label="数据来源" value={field.source} onChange={(event) => updateProfileField(field.id, { source: event.target.value as SavedTemplateField['source'] })} className="min-w-0 rounded border border-slate-300 bg-white px-1.5 py-1.5 text-[11px]">
-                        <option value="title">中文标题</option><option value="englishTitle">英文标题</option><option value="spuCode">SPU编号</option><option value="whiteImage">白色图片链接</option><option value="blackImage">黑色图片链接</option><option value="static">固定文本</option>
-                      </select>
-                      <input aria-label="目标列" value={field.column} onChange={(event) => updateProfileField(field.id, { column: event.target.value.toUpperCase() })} placeholder="列" className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />
-                      <input aria-label="行偏移" type="number" min="0" max={profileConfig.rowsPerProduct - 1} value={field.rowOffset} onChange={(event) => updateProfileField(field.id, { rowOffset: Number(event.target.value) })} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />
-                      <input aria-label="重复次数" type="number" min="1" value={field.repeatCount || 1} onChange={(event) => updateProfileField(field.id, { repeatCount: Number(event.target.value) })} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />
-                      <input aria-label="重复行步长" type="number" min="1" value={field.rowStep || 1} onChange={(event) => updateProfileField(field.id, { rowStep: Number(event.target.value) })} className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />
-                      {field.source === 'static' && <input aria-label="固定文本" value={field.staticValue || ''} onChange={(event) => updateProfileField(field.id, { staticValue: event.target.value })} placeholder="固定文本" className="min-w-0 rounded border border-slate-300 px-2 py-1.5 text-[11px]" />}
-                      <button type="button" onClick={() => setProfileConfig((prev) => ({ ...prev, fields: prev.fields.filter((item) => item.id !== field.id) }))} title="移除此字段" className="rounded px-2 text-rose-600 hover:bg-rose-50"><Trash2 className="h-3.5 w-3.5" /></button>
-                    </div>)}
-                    <button type="button" onClick={addProfileField} className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:bg-slate-100">添加映射字段</button>
-                  </div>}
-                  <div className="flex items-center justify-between gap-2 border-t border-slate-200 pt-2">
-                    <span className="text-[10px] text-slate-500">保存原模板与映射规则，导出只修改选定工作表</span>
-                    <div className="flex items-center gap-2">
-                      <button type="button" onClick={() => void handleSaveProfileConfig()} className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">保存名称与写入规则</button>
-                      <button type="button" onClick={() => void handleDeleteProfile()} title="删除模板档案" className="rounded-md p-1.5 text-rose-600 hover:bg-rose-50"><Trash2 className="h-4 w-4" /></button>
-                    </div>
-                  </div>
-                </div>
-              )}
+              <p className="text-xs text-slate-500">当前类目：{activeCategory.label}。写入位置由程序预设，底表按类目分别保存在腾讯云。</p>
 
               {/* 模板操作区 */}
               {templateFile ? (
@@ -1742,15 +1578,16 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     <button
                       type="button"
                       onClick={() => templateInputRef.current?.click()}
+                      disabled={isTemplateUploading}
                       className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-medium cursor-pointer"
                     >
-                      更换
+                      {isTemplateUploading ? '保存中...' : '更换'}
                     </button>
                     <button
                       type="button"
                       onClick={handleResetTemplate}
                       className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 cursor-pointer"
-                      title="重置为默认模板"
+                      title="删除此类目腾讯云底表"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -1759,18 +1596,19 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               ) : (
                 <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 truncate">
-                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                    <Upload className="w-5 h-5 text-blue-600 shrink-0" />
                     <div>
-                      <p className="text-xs font-bold text-slate-800">{activeCategory.configured ? '使用系统内置标准多工作表模板' : '该类目尚未配置专用模板'}</p>
-                      <p className="text-[11px] text-slate-500">{activeCategory.configured ? '沿用现有大码写入规则' : '请上传此类目的目标模板，避免沿用大码写入位置'}</p>
+                      <p className="text-xs font-bold text-slate-800">尚未保存{activeCategory.label}底表</p>
+                      <p className="text-[11px] text-slate-500">上传一次后会自动保存，后续进入该类目无需再次上传</p>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={() => templateInputRef.current?.click()}
+                    disabled={isTemplateUploading}
                     className="px-3 py-1.5 rounded-lg border border-purple-300 bg-white hover:bg-purple-50 text-purple-700 text-xs font-semibold cursor-pointer shrink-0"
                   >
-                    {activeCategory.configured ? '上传自定义底表' : '上传此类目模板'}
+                    {isTemplateUploading ? '正在保存...' : '上传并永久保存底表'}
                   </button>
                 </div>
               )}
