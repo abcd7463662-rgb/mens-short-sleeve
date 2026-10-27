@@ -42,6 +42,8 @@ export async function repairSportWorkbookSizes(file: File): Promise<Blob> {
   for (const originalSpuRow of [...spuRows].reverse()) {
     worksheet.spliceRows(originalSpuRow + 12, 1);
     worksheet.spliceRows(originalSpuRow + 6, 1);
+    worksheet.getCell(`AC${originalSpuRow}`).value = '否';
+    worksheet.getCell(`AE${originalSpuRow}`).value = '圆领';
 
     for (let colorIndex = 0; colorIndex < 2; colorIndex++) {
       SPORT_SIZES.forEach((size, sizeIndex) => {
