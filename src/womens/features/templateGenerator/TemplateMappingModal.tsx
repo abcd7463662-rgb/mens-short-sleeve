@@ -132,7 +132,7 @@ export const TemplateMappingModal: React.FC<TemplateMappingModalProps> = ({
       return;
     }
     const newRule: SpuAttributeRule = {
-      id: `custom_${Date.now()}`,
+      id: `custom_${crypto.randomUUID()}`,
       column: newSpuCol.toUpperCase().trim(),
       value: newSpuVal,
       category: newSpuCat.trim() || '自定义属性',

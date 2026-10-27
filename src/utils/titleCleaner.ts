@@ -28,6 +28,9 @@ export function cleanChineseTitle(rawTitle: string): string {
   if (!rawTitle) return '';
   let title = String(rawTitle);
 
+  // Remove the source-sheet annotation without changing the remaining product title.
+  title = title.replace(/可\s*能\s*包\s*含\s*[:：]?/g, '');
+
   // 1. 剔除注册商标符号 ® 及 (R)、（R）、™
   title = title.replace(/[®™\u00AE\u2122]/g, '');
   title = title.replace(/\([rR]\)|（[rR]）|\[[rR]\]|【[rR]】/g, '');

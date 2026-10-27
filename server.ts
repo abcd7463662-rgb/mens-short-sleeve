@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
+import { createHash } from 'crypto';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -22,6 +23,38 @@ function rememberTranslation(key: string, value: string) {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const mutationQueues = new Map<string, Promise<void>>();
+async function withMutationLock<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = mutationQueues.get(key) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => current);
+  mutationQueues.set(key, tail);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (mutationQueues.get(key) === tail) mutationQueues.delete(key);
+  }
+}
+
+const runWithImageSlot = (() => {
+  const limit = 4;
+  let available = limit;
+  const waiters: Array<() => void> = [];
+  return async <T>(task: () => Promise<T>): Promise<T> => {
+    if (available > 0) available -= 1;
+    else await new Promise<void>((resolve) => waiters.push(resolve));
+    try { return await task(); }
+    finally {
+      const next = waiters.shift();
+      if (next) next();
+      else available += 1;
+    }
+  };
+})();
 
 /**
  * 上架目标模板的持久化存储。
@@ -58,8 +91,13 @@ function readTemplateMeta(): TemplateMeta | null {
 
 function writeTemplateLocally(buffer: Buffer, meta: TemplateMeta) {
   ensureTemplateDir();
-  fs.writeFileSync(TEMPLATE_FILE, buffer);
-  fs.writeFileSync(TEMPLATE_META, JSON.stringify(meta, null, 2));
+  const suffix = '.' + process.pid + '.' + Math.random().toString(36).slice(2) + '.tmp';
+  const templateTemp = TEMPLATE_FILE + suffix;
+  const metaTemp = TEMPLATE_META + suffix;
+  fs.writeFileSync(templateTemp, buffer);
+  fs.writeFileSync(metaTemp, JSON.stringify(meta, null, 2));
+  fs.renameSync(templateTemp, TEMPLATE_FILE);
+  fs.renameSync(metaTemp, TEMPLATE_META);
 }
 
 // 仓库是公开的，所以读取备份不需要令牌；只有写入（上传新模板）才需要 GITHUB_TOKEN
@@ -505,17 +543,19 @@ async function startServer() {
       res.status(400).json({ error: '模板文件无效、为空或超过 35 MB' }); return;
     }
     try {
-      const { cos, settings } = await getCategoryTemplateCos();
-      const keys = categoryTemplateKeys(category);
-      const savedAt = new Date().toISOString();
-      const meta = Buffer.from(JSON.stringify({ name: safeName, savedAt, size: buffer.length }), 'utf8');
-      const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject(
-        { Bucket: settings.bucket, Region: settings.region, Key, Body, ContentType },
-        (error: any) => error ? reject(error) : resolve()
-      ));
-      await put(keys.file, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      await put(keys.meta, meta, 'application/json; charset=utf-8');
-      res.json({ success: true, permanent: true, name: safeName, size: buffer.length, savedAt });
+      await withMutationLock('category-template:' + category, async () => {
+        const { cos, settings } = await getCategoryTemplateCos();
+        const keys = categoryTemplateKeys(category);
+        const savedAt = new Date().toISOString();
+        const meta = Buffer.from(JSON.stringify({ name: safeName, savedAt, size: buffer.length }), 'utf8');
+        const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject(
+          { Bucket: settings.bucket, Region: settings.region, Key, Body, ContentType },
+          (error: any) => error ? reject(error) : resolve()
+        ));
+        await put(keys.file, buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        await put(keys.meta, meta, 'application/json; charset=utf-8');
+        res.json({ success: true, permanent: true, name: safeName, size: buffer.length, savedAt });
+      });
     } catch (error: any) {
       res.status(502).json({ error: error.message || '模板保存到腾讯云失败' });
     }
@@ -525,14 +565,16 @@ async function startServer() {
     const category = resolveCategoryTemplate(req.query.category);
     if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
     try {
-      const { cos, settings } = await getCategoryTemplateCos();
-      const keys = categoryTemplateKeys(category);
-      const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject(
-        { Bucket: settings.bucket, Region: settings.region, Key },
-        (error: any) => error ? reject(error) : resolve()
-      ));
-      await Promise.all([remove(keys.file), remove(keys.meta)]);
-      res.json({ success: true });
+      await withMutationLock('category-template:' + category, async () => {
+        const { cos, settings } = await getCategoryTemplateCos();
+        const keys = categoryTemplateKeys(category);
+        const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject(
+          { Bucket: settings.bucket, Region: settings.region, Key },
+          (error: any) => error ? reject(error) : resolve()
+        ));
+        await Promise.all([remove(keys.file), remove(keys.meta)]);
+        res.json({ success: true });
+      });
     } catch (error: any) {
       res.status(502).json({ error: error.message || '删除腾讯云模板失败' });
     }
@@ -591,7 +633,9 @@ async function startServer() {
   };
   const writeWomenProfiles = async (profiles: any[]) => {
     fs.mkdirSync(WOMEN_TEMPLATE_DIR, { recursive: true });
-    fs.writeFileSync(WOMEN_PROFILES_FILE, JSON.stringify(profiles, null, 2));
+    const temp = WOMEN_PROFILES_FILE + '.' + process.pid + '.' + Math.random().toString(36).slice(2) + '.tmp';
+    fs.writeFileSync(temp, JSON.stringify(profiles, null, 2));
+    fs.renameSync(temp, WOMEN_PROFILES_FILE);
     if (githubCanWrite() && await ensureStoreBranch()) {
       await writeGithubFile(WOMEN_PROFILES_BRANCH_PATH, Buffer.from(JSON.stringify(profiles, null, 2)).toString('base64'), 'chore: update saved women template profiles');
     }
@@ -653,11 +697,13 @@ async function startServer() {
       const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
       const put = (Key: string, Body: Buffer, ContentType: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: bucket, Region: region, Key, Body, ContentType }, (err: any) => err ? reject(err) : resolve()));
       const prefix = 'templates/custom/' + category + '/' + id;
-      await put(prefix + '/template.xlsx', buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      await put(prefix + '/profile.json', Buffer.from(JSON.stringify(profile || {}, null, 2), 'utf8'), 'application/json; charset=utf-8');
-      const existing = await readWomenCosIndex(category);
-      const next = [...existing.filter((item) => item.id !== id), { ...profile, id, category, size: buffer.length, savedAt: new Date().toISOString() }];
-      await put('templates/custom/' + category + '/index.json', Buffer.from(JSON.stringify(next, null, 2), 'utf8'), 'application/json; charset=utf-8');
+      await withMutationLock('women-template-index:' + category, async () => {
+        await put(prefix + '/template.xlsx', buffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        await put(prefix + '/profile.json', Buffer.from(JSON.stringify(profile || {}, null, 2), 'utf8'), 'application/json; charset=utf-8');
+        const existing = await readWomenCosIndex(category);
+        const next = [...existing.filter((item) => item.id !== id), { ...profile, id, category, size: buffer.length, savedAt: new Date().toISOString() }];
+        await put('templates/custom/' + category + '/index.json', Buffer.from(JSON.stringify(next, null, 2), 'utf8'), 'application/json; charset=utf-8');
+      });
       res.json({ success: true, permanent: true, bucket, region, prefix, templateUrl: 'https://' + bucket + '.cos.' + region + '.myqcloud.com/' + prefix + '/template.xlsx' });
     } catch (err: any) { res.status(500).json({ error: err.message || '腾讯云模板备份失败' }); }
   });
@@ -711,14 +757,18 @@ async function startServer() {
       if (typeof fileBase64 !== 'string' || !fileBase64) { res.status(400).json({ error: '请选择模板文件' }); return; }
       const buffer = Buffer.from(fileBase64.replace(/^data:[^;]+;base64,/, ''), 'base64');
       if (!buffer.length) { res.status(400).json({ error: '模板文件为空' }); return; }
-      const file = getWomenProfileFile(id);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, buffer);
-      const profiles = await restoreWomenProfiles();
-      const profile = { id, category, name: name.trim().slice(0, 100), filename: path.basename(String(filename || 'template.xlsx')), config, savedAt: new Date().toISOString(), size: buffer.length };
-      const next = [...profiles.filter((item) => item.id !== id), profile];
-      await writeWomenProfiles(next);
-      res.json({ success: true, permanent: true, profile });
+      await withMutationLock('women-template-profiles', async () => {
+        const file = getWomenProfileFile(id);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        const temp = file + '.' + process.pid + '.' + Math.random().toString(36).slice(2) + '.tmp';
+        fs.writeFileSync(temp, buffer);
+        fs.renameSync(temp, file);
+        const profiles = await restoreWomenProfiles();
+        const profile = { id, category, name: name.trim().slice(0, 100), filename: path.basename(String(filename || 'template.xlsx')), config, savedAt: new Date().toISOString(), size: buffer.length };
+        const next = [...profiles.filter((item) => item.id !== id), profile];
+        await writeWomenProfiles(next);
+        res.json({ success: true, permanent: true, profile });
+      });
     } catch (err: any) { res.status(500).json({ error: err.message || '保存模板失败' }); }
   });
 
@@ -726,6 +776,7 @@ async function startServer() {
     const id = String(req.params.id || '');
     if (!/^[a-zA-Z0-9_-]{1,80}$/.test(id)) { res.status(400).json({ error: '模板编号无效' }); return; }
     try {
+      await withMutationLock('women-template-profiles', async () => {
       const profiles = await restoreWomenProfiles();
       const profile = profiles.find((item) => item.id === id);
       const category = resolveWomenCategory(req.query.category || profile?.category);
@@ -735,16 +786,19 @@ async function startServer() {
         const COS = (await import('cos-nodejs-sdk-v5')).default;
         const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
         const remove = (Key: string) => new Promise<void>((resolve, reject) => cos.deleteObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any) => err ? reject(err) : resolve()));
-        await remove('templates/custom/' + category + '/' + id + '/template.xlsx');
-        await remove('templates/custom/' + category + '/' + id + '/profile.json');
-        const index = (await readWomenCosIndex(category)).filter((item) => item.id !== id);
-        await new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json', Body: Buffer.from(JSON.stringify(index, null, 2)), ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
+        await withMutationLock('women-template-index:' + category, async () => {
+          await remove('templates/custom/' + category + '/' + id + '/template.xlsx');
+          await remove('templates/custom/' + category + '/' + id + '/profile.json');
+          const index = (await readWomenCosIndex(category)).filter((item) => item.id !== id);
+          await new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key: 'templates/custom/' + category + '/index.json', Body: Buffer.from(JSON.stringify(index, null, 2)), ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
+        });
       }
       const file = getWomenProfileFile(id);
       if (fs.existsSync(file)) fs.unlinkSync(file);
       const nextProfiles = (await restoreWomenProfiles()).filter((item) => item.id !== id);
       await writeWomenProfiles(nextProfiles);
       res.json({ success: true });
+      });
     } catch (err: any) { res.status(500).json({ error: err.message || '删除模板失败' }); }
   });
 
@@ -786,11 +840,20 @@ async function startServer() {
         res.status(400).json({ error: '模板文件为空' });
         return;
       }
-      fs.mkdirSync(paths.dir, { recursive: true });
-      const safeName = path.basename(String(filename || 'women-template.xlsx'));
-      fs.writeFileSync(paths.file, buffer);
-      fs.writeFileSync(paths.meta, JSON.stringify({ name: safeName, savedAt: new Date().toISOString(), size: buffer.length }, null, 2));
-      res.json({ success: true, name: safeName });
+      withMutationLock('category-template:' + category, async () => {
+        fs.mkdirSync(paths.dir, { recursive: true });
+        const safeName = path.basename(String(filename || 'women-template.xlsx'));
+        const suffix = '.' + process.pid + '.' + Math.random().toString(36).slice(2) + '.tmp';
+        const metaPath = paths.meta + suffix;
+        const filePath = paths.file + suffix;
+        fs.writeFileSync(filePath, buffer);
+        fs.writeFileSync(metaPath, JSON.stringify({ name: safeName, savedAt: new Date().toISOString(), size: buffer.length }, null, 2));
+        fs.renameSync(filePath, paths.file);
+        fs.renameSync(metaPath, paths.meta);
+        res.json({ success: true, name: safeName });
+      }).catch((error) => {
+        if (!res.headersSent) res.status(500).json({ error: error.message || '保存女士模板失败' });
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '保存女士模板失败' });
     }
@@ -800,13 +863,17 @@ async function startServer() {
     try {
       const category = resolveWomenCategory(req.query.category);
       if (!category) { res.status(400).json({ error: '无效的商品类目' }); return; }
-      const paths = getWomenTemplatePaths(category);
-      if (category === 'womens-plus-tee' && paths.dir === LEGACY_WOMEN_TEMPLATE_DIR) {
-        for (const file of [paths.file, paths.meta]) if (fs.existsSync(file)) fs.unlinkSync(file);
-      } else {
-        fs.rmSync(paths.dir, { recursive: true, force: true });
-      }
-      res.json({ success: true });
+      void withMutationLock('category-template:' + category, async () => {
+        const paths = getWomenTemplatePaths(category);
+        if (category === 'womens-plus-tee' && paths.dir === LEGACY_WOMEN_TEMPLATE_DIR) {
+          for (const file of [paths.file, paths.meta]) if (fs.existsSync(file)) fs.unlinkSync(file);
+        } else {
+          fs.rmSync(paths.dir, { recursive: true, force: true });
+        }
+        res.json({ success: true });
+      }).catch((error) => {
+        if (!res.headersSent) res.status(500).json({ error: error.message || '删除女士模板失败' });
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '删除女士模板失败' });
     }
@@ -887,20 +954,22 @@ async function startServer() {
       const storeName = getStoreLinksKey(req.body?.storeName);
       if (!storeName) { res.status(400).json({ error: '店铺名称无效' }); return; }
       const input = Array.isArray(req.body?.urls) ? req.body.urls.map((url: unknown) => String(url || '').trim()).filter((url: string) => /^https?:\/\//i.test(url)) : [];
-      const existing = await readStoreLinks(storeName);
-      const urls = [...new Set([...existing, ...input])];
-      const payload = Buffer.from(JSON.stringify({ store: storeName, updatedAt: new Date().toISOString(), totalCount: urls.length, urls }, null, 2), 'utf8');
-      const settings = getStoreLinksSettings();
-      if (!settings.secretId || !settings.secretKey || !settings.bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置，历史链接未能永久保存' }); return; }
-      const COS = (await import('cos-nodejs-sdk-v5')).default;
-      const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
-      const put = (Key: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key, Body: payload, ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
-      await put(storeName);
-      await put(storeName + '.json');
-      const localDir = path.join(process.cwd(), 'store_records');
-      fs.mkdirSync(localDir, { recursive: true });
-      fs.writeFileSync(path.join(localDir, storeName + '.json'), payload);
-      res.json({ success: true, storeName, totalCount: urls.length, addedCount: urls.length - existing.length });
+      await withMutationLock('store-links:' + storeName, async () => {
+        const existing = await readStoreLinks(storeName);
+        const urls = [...new Set([...existing, ...input])];
+        const payload = Buffer.from(JSON.stringify({ store: storeName, updatedAt: new Date().toISOString(), totalCount: urls.length, urls }, null, 2), 'utf8');
+        const settings = getStoreLinksSettings();
+        if (!settings.secretId || !settings.secretKey || !settings.bucket) { res.status(503).json({ error: '腾讯云 COS 环境变量未配置，历史链接未能永久保存' }); return; }
+        const COS = (await import('cos-nodejs-sdk-v5')).default;
+        const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
+        const put = (Key: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key, Body: payload, ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
+        await put(storeName);
+        await put(storeName + '.json');
+        const localDir = path.join(process.cwd(), 'store_records');
+        fs.mkdirSync(localDir, { recursive: true });
+        fs.writeFileSync(path.join(localDir, storeName + '.json'), payload);
+        res.json({ success: true, storeName, totalCount: urls.length, addedCount: urls.length - existing.length });
+      });
     } catch (error: any) { res.status(500).json({ error: error.message || '保存店铺历史链接失败' }); }
   });
 
@@ -961,13 +1030,15 @@ async function startServer() {
         res.status(400).json({ error: '图片数据无效或超过 15MB' });
         return;
       }
-      const safeFilename = path.basename(String(filename || `img_${Date.now()}.jpg`));
+      const safeFilename = path.basename(String(filename || 'image.jpg'));
+      const contentHash = createHash('sha256').update(buffer).digest('hex').slice(0, 20);
+      const objectKey = `${contentHash}_${safeFilename}`;
       const COS = (await import('cos-nodejs-sdk-v5')).default;
       const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
       cos.putObject({
         Bucket: targetBucket,
         Region: targetRegion,
-        Key: safeFilename,
+        Key: objectKey,
         Body: buffer,
         ContentType: 'image/jpeg',
         ACL: 'public-read',
@@ -976,7 +1047,7 @@ async function startServer() {
           res.status(500).json({ error: err.message || '上传腾讯云失败', code: err.code });
           return;
         }
-        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(safeFilename)}`, bucket: targetBucket, region: targetRegion, key: safeFilename });
+        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(objectKey)}`, bucket: targetBucket, region: targetRegion, key: objectKey });
       });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '上传腾讯云失败' });
@@ -997,22 +1068,24 @@ async function startServer() {
         return;
       }
 
-      const meta: TemplateMeta = {
-        name: filename || 'template.xlsx',
-        savedAt: new Date().toISOString(),
-        size: buffer.length,
-      };
-      writeTemplateLocally(buffer, meta);
+      await withMutationLock('shared-men-template', async () => {
+        const meta: TemplateMeta = {
+          name: filename || 'template.xlsx',
+          savedAt: new Date().toISOString(),
+          size: buffer.length,
+        };
+        writeTemplateLocally(buffer, meta);
 
-      const backedUp = await backupTemplateToGitHub(buffer.toString('base64'), meta);
+        const backedUp = await backupTemplateToGitHub(buffer.toString('base64'), meta);
 
-      res.json({
-        success: true,
-        name: meta.name,
-        savedAt: meta.savedAt,
-        size: meta.size,
-        backedUp,
-        backupConfigured: githubCanWrite(),
+        res.json({
+          success: true,
+          name: meta.name,
+          savedAt: meta.savedAt,
+          size: meta.size,
+          backedUp,
+          backupConfigured: githubCanWrite(),
+        });
       });
     } catch (err: any) {
       console.error('Error in POST /api/template:', err);
@@ -1022,6 +1095,7 @@ async function startServer() {
 
   app.delete('/api/template', async (req, res) => {
     try {
+      await withMutationLock('shared-men-template', async () => {
       if (fs.existsSync(TEMPLATE_FILE)) fs.unlinkSync(TEMPLATE_FILE);
       if (fs.existsSync(TEMPLATE_META)) fs.unlinkSync(TEMPLATE_META);
 
@@ -1045,6 +1119,7 @@ async function startServer() {
       }
       lastRestoreFailureAt = 0;
       res.json({ success: true });
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '清除模板失败' });
     }
@@ -1352,14 +1427,14 @@ async function startServer() {
         requestPayload.images = images;
       }
 
-      const response = await fetch('https://www.maizitech.ai/v1/images/generations', {
+      const response = await runWithImageSlot(() => fetch('https://www.maizitech.ai/v1/images/generations', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestPayload),
-      });
+      }));
 
       const responseText = await response.text();
       let responseData: any;
@@ -1685,14 +1760,14 @@ async function startServer() {
         requestPayload.images = images;
       }
 
-      const submitRes = await fetch('https://www.maizitech.ai/v1/images/generations', {
+      const submitRes = await runWithImageSlot(() => fetch('https://www.maizitech.ai/v1/images/generations', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestPayload),
-      });
+      }));
 
       const submitData: any = await submitRes.json();
       if (!submitRes.ok) {

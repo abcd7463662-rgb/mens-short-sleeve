@@ -28,6 +28,7 @@ export function cleanChineseTitle(rawTitle: string): string {
   if (!rawTitle) return '';
   // 移除换行符、回车符和制表符，并合并连续空格，确保标题在单行内
   let title = String(rawTitle).replace(/[\r\n\t]/g, ' ').replace(/\s+/g, ' ').trim();
+  title = title.replace(/可\s*能\s*包\s*含\s*[:：]?/g, '');
 
   // 1. 剔除注册商标符号 ® 及 (R)、（R）、™
   title = title.replace(/[®™\u00AE\u2122]/g, '');
