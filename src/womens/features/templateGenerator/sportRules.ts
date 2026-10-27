@@ -66,30 +66,29 @@ export const TEMPLATE_ROW6_RULES: CellRule[] = [
 export const TEMPLATE_ROW6_RULES_MEN: CellRule[] = TEMPLATE_ROW6_RULES;
 export const TEMPLATE_ROW6_RULES_WOMEN: CellRule[] = TEMPLATE_ROW6_RULES;
 
-// 尺码与尺寸测量模板基准（6码一循环，大码体系：0XL, 1XL, 2XL, 3XL, 4XL, 5XL，保留精准 CM 测量值）
+// 女士运动短袖尺码与测量基准：S 至 XXL。
 export const SIZE_CYCLE_MEN = [
-  { size: '0XL', co: 48, cp: 112, cq: 76, cr: 23 },
-  { size: '1XL', co: 51, cp: 122, cq: 79, cr: 23 },
-  { size: '2XL', co: 53, cp: 132, cq: 82, cr: 25 },
-  { size: '3XL', co: 56, cp: 142, cq: 84, cr: 25 },
-  { size: '4XL', co: 58, cp: 152, cq: 87, cr: 26 },
-  { size: '5XL', co: 61, cp: 162, cq: 89, cr: 27 },
+  { size: 'S', co: 41, cp: 88, cq: 68, cr: 20 },
+  { size: 'M', co: 43, cp: 94, cq: 70, cr: 20 },
+  { size: 'L', co: 45, cp: 100, cq: 72, cr: 21 },
+  { size: 'XL', co: 47, cp: 106, cq: 74, cr: 21 },
+  { size: 'XXL', co: 49, cp: 112, cq: 76, cr: 22 },
 ];
 
 export const SIZE_CYCLE_WOMEN = SIZE_CYCLE_MEN;
 
 export const SIZE_CYCLE = SIZE_CYCLE_MEN;
 
-// 支持 Row 7 ~ Row 18（双色×6码：7~12行白色，13~18行黑色）
-export const SKU_ROWS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
+// 支持 Row 7 ~ Row 16（双色×5码：7~11行白色，12~16行黑色）
+export const SKU_ROWS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 /**
- * 预设的「生成模板」SKU规格配置 (Row 7 - Row 18: CD 到 CI 列)
+ * 预设的「生成模板」SKU规格配置 (Row 7 - Row 16: CD 到 CI 列)
  */
 export const TEMPLATE_SKU_RULES: CellRule[] = SKU_ROWS.flatMap((row) => {
   const cycleIndex = (row - 7) % SIZE_CYCLE.length;
   const cycleItem = SIZE_CYCLE[cycleIndex];
-  const color = row >= 13 ? '黑色' : '白色';
+  const color = row >= 12 ? '黑色' : '白色';
   return [
     { cell: `A${row}`, column: 'A', value: 'sku', category: 'SKU类型' },
     { cell: `B${row}`, column: 'B', value: DEFAULT_018_SPU_CODE, category: 'SPU编号(018开头14位)' },
@@ -103,7 +102,7 @@ export const TEMPLATE_SKU_RULES: CellRule[] = SKU_ROWS.flatMap((row) => {
 });
 
 /**
- * 预设的「生成模板」尺码测量规格数据 (Row 7 - Row 18: CJ, CK, CL, CM 列，填入 CM 数值)
+ * 预设的「生成模板」尺码测量规格数据 (Row 7 - Row 16: CJ, CK, CL, CM 列，填入 CM 数值)
  */
 export const TEMPLATE_MEASUREMENT_RULES: CellRule[] = SKU_ROWS.flatMap((row) => {
   const cycleIndex = (row - 7) % SIZE_CYCLE.length;
@@ -251,10 +250,10 @@ export function formatLocalPath(
 
 /**
  * 构建多商品整合的完整模板写入规则：
- * - 每个商品包含 1 行 SPU + 2 种颜色(白色、黑色)的 SKU（每种颜色 6 码：L, XL, XXL, XXXL, XXXXL, XXXXXL）
+ * - 每个商品包含 1 行 SPU + 2 种颜色(白色、黑色)的 SKU（每种颜色 5 码：S, M, L, XL, XXL）
  *   - 支持双色：白色、黑色
  *   - SPU 行: C 填中文标题，D 填谷歌翻译英文标题，EA 填入排在首位的颜色图片链接
- *   - SKU 行: 每种颜色 6 行，C 填标题，D 填英文标题，CB 填颜色名称，EA 填该颜色图片链接
+ *   - SKU 行: 每种颜色 5 行，C 填标题，D 填英文标题，CB 填颜色名称，EA 填该颜色图片链接
  * - 同一个表格往下增加，支持多商品连续追加
  */
 export function buildMultiProductTemplateRules(
@@ -363,7 +362,7 @@ export function buildMultiProductTemplateRules(
       });
     }
 
-    // 2. SKU 各颜色行：每种颜色 6 行 (L, XL, XXL, XXXL, XXXXL, XXXXXL)
+    // 2. SKU 各颜色行：每种颜色 5 行 (S, M, L, XL, XXL)
     let skuCurrentRow = spuRow + 1;
     colors.forEach((cKey) => {
       const colorName = COLOR_NAMES[cKey] || '标准色';
