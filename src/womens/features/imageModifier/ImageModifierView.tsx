@@ -110,6 +110,7 @@ async function uploadImageToCos(payload: Record<string, unknown>): Promise<{ suc
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(60000),
       });
       const result = await response.json().catch(() => ({}));
       if (response.ok && result.success && result.url) return result;
@@ -886,6 +887,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const result = await executeAsyncImageWorkflow(params, () => {});
       let finalImageUrl = result.imageUrl;
       let cosUploadError = '';
+      setProducts((prev) => prev.map((item) => item.id === productId
+        ? { ...item, [urlKey]: result.imageUrl, [statusKey]: 'running' }
+        : item));
 
       // 核心需求：自动通过纯白背景填充至 1340*1785 (3:4 标准电商主图规格)
       let paddedSuccess = false;
@@ -934,6 +938,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         }
       } catch (padErr) {
         console.warn('Image padding failed, using raw output:', padErr);
+        finalImageUrl = result.imageUrl;
       }
 
       // Success
@@ -950,9 +955,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               ? { ...p.cosUploadErrors, [color]: cosUploadError }
               : Object.fromEntries(Object.entries(p.cosUploadErrors || {}).filter(([key]) => key !== color)),
           };
-          const allColorsDone =
-            (color === 'white' ? 'success' : updated.whiteStatus) === 'success' &&
-            (color === 'black' ? 'success' : updated.blackStatus) === 'success';
+          const allColorsDone = COLOR_CONFIG.every(({ key }) =>
+            (key === color ? 'success' : updated[`${key}Status` as const]) === 'success'
+          );
           return {
             ...updated,
             status: allColorsDone ? 'success' : 'running',
@@ -2169,7 +2174,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                 {c.name}款 (1340)
                               </span>
                               <div className="w-full aspect-[3/4] rounded-xl bg-slate-50 border border-slate-200 overflow-hidden relative group flex items-center justify-center shadow-2xs">
-                                {status === 'running' ? (
+                                {status === 'running' && !hasImg ? (
                                   <div className={`flex flex-col items-center justify-center p-2 text-center ${c.headerText}`}>
                                     <RefreshCw className="w-4 h-4 animate-spin mb-1" />
                                     <span className="text-[9px] font-semibold animate-pulse">
@@ -2195,6 +2200,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                     <div className="absolute bottom-1 left-1 bg-black/60 text-white text-[8px] px-1 py-0.2 rounded font-mono">
                                       1340*1785
                                     </div>
+                                    {status === 'running' && <div className="absolute bottom-1 right-1 bg-amber-500/95 text-white text-[8px] px-1 py-0.2 rounded">已生成，处理中</div>}
                                     <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center text-white gap-2">
                                       <Maximize2 className="w-4 h-4 drop-shadow" />
                                     </div>
@@ -2378,7 +2384,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                 className="w-10 h-13 rounded-lg bg-slate-50 border border-slate-200 overflow-hidden relative group cursor-pointer flex items-center justify-center"
                                 title={`${c.name}款 (1340*1785 · 点击放大)`}
                               >
-                                {status === 'running' ? (
+                                {status === 'running' && !hasImg ? (
                                   <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-500" />
                                 ) : hasImg && imgUrl ? (
                                   <img

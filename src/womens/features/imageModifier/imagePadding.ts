@@ -43,8 +43,14 @@ export async function padImageTo1340x1785(
 
     const img = new Image();
     img.crossOrigin = 'anonymous';
+    const loadTimeout = window.setTimeout(() => {
+      img.src = '';
+      if (isObjectUrl) URL.revokeObjectURL(srcUrl);
+      reject(new Error('加载生成图片超时'));
+    }, 45000);
 
     img.onload = () => {
+      window.clearTimeout(loadTimeout);
       try {
         const origW = img.naturalWidth || img.width;
         const origH = img.naturalHeight || img.height;
@@ -109,6 +115,7 @@ export async function padImageTo1340x1785(
     };
 
     img.onerror = () => {
+      window.clearTimeout(loadTimeout);
       if (isObjectUrl) {
         URL.revokeObjectURL(srcUrl);
       }
@@ -159,6 +166,7 @@ export async function saveHostedImage(
       imageBase64,
       filename: preferredFilename,
     }),
+    signal: AbortSignal.timeout(60000),
   });
 
   const resJson = await response.json();
