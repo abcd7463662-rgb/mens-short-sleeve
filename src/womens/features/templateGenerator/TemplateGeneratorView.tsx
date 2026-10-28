@@ -487,7 +487,7 @@ export const TemplateGeneratorView: React.FC<TemplateGeneratorViewProps> = ({ on
                           className="bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold text-xs px-1.5 py-0.5 rounded block truncate"
                           title={String(mod.value)}
                         >
-                          {mod.column === 'AC' ? '65%' : mod.column === 'AE' ? '35%' : mod.value}
+                          {mod.value}
                         </span>
                       </div>
                     </div>

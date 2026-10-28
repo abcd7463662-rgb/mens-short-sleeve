@@ -242,9 +242,8 @@ export async function executeTemplateGeneration(
       const cell = targetWorksheet.getCell(rule.cell);
       const originalValue = String(cell.value ?? '(空白)');
 
-      // AC 列填入 '65%'，AE 列填入 '35%' (严格写入字面百分比字符串，不填 0.65 或 0.35)
       if (rule.column === 'AC' || rule.column === 'AE') {
-        const val = rule.column === 'AC' ? '65%' : '35%';
+        const val = String(rule.value);
         if (cell.isMerged && cell.master) {
           cell.master.value = val;
           if (cell.master.numFmt && cell.master.numFmt.includes('%')) {
@@ -268,12 +267,12 @@ export async function executeTemplateGeneration(
         }
       }
 
-      const verified = rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : String(cell.value ?? '');
+      const verified = String(cell.value ?? '');
 
       if (collectModifications) modifications.push({
         cell: rule.cell,
         column: rule.column,
-        value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
+        value: rule.value,
         originalValue,
         verifiedValue: verified,
         category: rule.category,
@@ -353,9 +352,9 @@ export async function executeTemplateGeneration(
     for (const rule of customRules) {
       const orig = sheet[rule.cell] ? String(sheet[rule.cell].v ?? '') : '(空白)';
       if (rule.column === 'AC') {
-        sheet[rule.cell] = { t: 's', v: '65%' };
+        sheet[rule.cell] = { t: 's', v: String(rule.value) };
       } else if (rule.column === 'AE') {
-        sheet[rule.cell] = { t: 's', v: '35%' };
+        sheet[rule.cell] = { t: 's', v: String(rule.value) };
       } else if (typeof rule.value === 'number') {
         const formattedStr = rule.numFmt === '0%' ? `${Math.round(rule.value * 100)}%` : String(rule.value);
         sheet[rule.cell] = { t: 'n', v: rule.value, z: rule.numFmt, w: formattedStr };
@@ -365,9 +364,9 @@ export async function executeTemplateGeneration(
       if (collectModifications) modifications.push({
         cell: rule.cell,
         column: rule.column,
-        value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
+        value: rule.value,
         originalValue: orig,
-        verifiedValue: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : String(rule.value),
+        verifiedValue: String(rule.value),
         category: rule.category,
       });
     }
@@ -429,17 +428,17 @@ export async function createDefaultProductTemplate(
   for (const rule of rules) {
     const cell = targetWorksheet.getCell(rule.cell);
     if (rule.column === 'AC' || rule.column === 'AE') {
-      const val = rule.column === 'AC' ? '65%' : '35%';
+      const val = String(rule.value);
       cell.value = val;
       cell.numFmt = '@';
     } else {
       cell.value = rule.value;
     }
-    const verified = rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : String(cell.value ?? '');
+    const verified = String(cell.value ?? '');
     modifications.push({
       cell: rule.cell,
       column: rule.column,
-      value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
+      value: rule.value,
       originalValue: '(空白)',
       verifiedValue: verified,
       category: rule.category,
@@ -511,17 +510,17 @@ export async function createDefaultMultiProductTemplate(
   for (const rule of rules) {
     const cell = targetWorksheet.getCell(rule.cell);
     if (rule.column === 'AC' || rule.column === 'AE') {
-      const val = rule.column === 'AC' ? '65%' : '35%';
+      const val = String(rule.value);
       cell.value = val;
       cell.numFmt = '@';
     } else {
       cell.value = rule.value;
     }
-    const verified = rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : String(cell.value ?? '');
+    const verified = String(cell.value ?? '');
     modifications.push({
       cell: rule.cell,
       column: rule.column,
-      value: rule.column === 'AC' ? '65%' : rule.column === 'AE' ? '35%' : rule.value,
+      value: rule.value,
       originalValue: '(空白)',
       verifiedValue: verified,
       category: rule.category,
