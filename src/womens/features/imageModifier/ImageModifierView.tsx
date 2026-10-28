@@ -1126,7 +1126,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   };
 
   // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
-  const handleExportCombined = async () => {
+  const handleExportCombined = async (forceExport = false) => {
     if (!templateFile || loadedTemplateCategory !== productCategory) {
       onShowToast('请先上传并保存' + activeCategory.label + '上架模板。', 'error');
       return;
@@ -1141,8 +1141,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     try {
       const storeName = selectedStore;
       const knownUrls = await readStoreHistory(storeName);
-      const { uniqueItems: exportProducts, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
-      if (duplicateCount) onShowToast(`已按 ${storeName} 去重历史跳过 ${duplicateCount} 款重复商品。`, 'info');
+      const { uniqueItems: uniqueProducts, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
+      const exportProducts = forceExport ? products : uniqueProducts;
+      if (duplicateCount && forceExport) onShowToast(`强制导出模式：本次将包含 ${duplicateCount} 款历史重复商品。`, 'info');
+      else if (duplicateCount) onShowToast(`已按 ${storeName} 去重历史跳过 ${duplicateCount} 款重复商品。`, 'info');
       if (!exportProducts.length) {
         onShowToast(`${storeName} 去重历史已收录当前全部商品，没有可导出的新商品。`, 'info');
         return;
@@ -1839,12 +1841,22 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               <button
                 type="button"
                 disabled={products.length === 0 || isBatchExporting}
-                onClick={handleExportCombined}
+                onClick={() => handleExportCombined(false)}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-40"
                 title="将所有商品按每款 21 行（1行SPU+4色×5码SKU）合并导出至同一个 Excel 表格，C列填中文标题，D6填谷歌翻译英文标题，4色随机排布"
               >
                 <FileDown className="w-4 h-4" />
                 <span>{isBatchExporting ? batchExportPhase || '正在导出整合表格...' : '导出整合上架模板 (.xlsx)'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={products.length === 0 || isBatchExporting}
+                onClick={() => handleExportCombined(true)}
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-amber-50 text-amber-800 text-xs sm:text-sm font-semibold transition-colors cursor-pointer border border-amber-300 shadow-xs disabled:opacity-40"
+                title="忽略当前店铺去重历史，强制导出所有已导入商品，包括重复商品"
+              >
+                <FileDown className="w-4 h-4" />
+                <span>强制导出（含重复）</span>
               </button>
               {isBatchExporting && <div className="w-full basis-full" role="status" aria-live="polite">
                 <div className="mb-1 flex items-center justify-between text-xs text-blue-700"><span>{batchExportPhase || '正在准备导出...'}</span><span>请勿关闭页面</span></div>
