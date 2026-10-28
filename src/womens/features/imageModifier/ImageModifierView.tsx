@@ -197,6 +197,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const [isTemplateUploading, setIsTemplateUploading] = useState(false);
   // 1. 商品信息导入状态
   const [products, setProducts] = useState<ProductItem[]>([]);
+  const [duplicateProductIds, setDuplicateProductIds] = useState<Set<string>>(() => new Set());
+  const [selectedDuplicateIds, setSelectedDuplicateIds] = useState<Set<string>>(() => new Set());
   const [tableFile, setTableFile] = useState<File | null>(null);
   const [isParsingTable, setIsParsingTable] = useState<boolean>(false);
   const [tableResult, setTableResult] = useState<TableParseResult | null>(null);
@@ -477,6 +479,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const sportRepairInputRef = useRef<HTMLInputElement | null>(null);
   const processingRef = useRef<boolean>(false);
   const productsRef = useRef<ProductItem[]>([]);
+  const processingProductIdsRef = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     productsRef.current = products;
@@ -718,7 +721,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   };
 
   // --- 3. 模板导出与 6 并发四色生图 (gpt-image-2.5 + 自动 1340*1785 白色背景填充) ---
-  const startProcessing = async () => {
+  const startProcessing = async (includeSelectedDuplicates = false) => {
     if (products.length === 0) {
       onShowToast('请先导入商品信息表格', 'error');
       return;
@@ -728,19 +731,52 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     setIsProcessing(true);
     try {
       const knownUrls = await readStoreHistory(storeName);
-      {
-        const { uniqueItems: unique, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
-        if (duplicateCount) {
-          setProducts(unique);
-          productsRef.current = unique;
-          if (!unique.length) {
-            processingRef.current = false;
-            setIsProcessing(false);
-            onShowToast(`${storeName}历史库已收录这 ${duplicateCount} 款商品，已跳过重复生图。`, 'info');
-            return;
-          }
-          onShowToast(`已跳过 ${duplicateCount} 款 ${storeName}历史重复商品，继续处理 ${unique.length} 款。`, 'info');
+      const { uniqueItems: unique, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
+      const uniqueIds = new Set(unique.map((product) => product.id));
+      const duplicates = products.filter((product) => !uniqueIds.has(product.id));
+      const duplicateIds = new Set(duplicates.map((product) => product.id));
+      setDuplicateProductIds(duplicateIds);
+      setSelectedDuplicateIds((selected) => new Set([...selected].filter((id) => duplicateIds.has(id))));
+      const selectedDuplicates = includeSelectedDuplicates
+        ? duplicates.filter((product) => selectedDuplicateIds.has(product.id))
+        : [];
+      if (includeSelectedDuplicates && !selectedDuplicates.length) {
+        processingRef.current = false;
+        setIsProcessing(false);
+        onShowToast('没有已选中的重复商品。请先检测重复项并勾选要生成的商品。', 'info');
+        return;
+      }
+      const productsToProcess = includeSelectedDuplicates ? selectedDuplicates : unique;
+      if (includeSelectedDuplicates && selectedDuplicates.length) {
+        const selectedIds = new Set(selectedDuplicates.map((product) => product.id));
+        const resetProducts = productsRef.current.map((product) => selectedIds.has(product.id)
+          ? {
+              ...product,
+              status: 'idle' as const,
+              whiteStatus: 'idle' as const,
+              blackStatus: 'idle' as const,
+              apricotStatus: 'idle' as const,
+              greenStatus: 'idle' as const,
+              whiteError: undefined,
+              blackError: undefined,
+              apricotError: undefined,
+              greenError: undefined,
+            }
+          : product);
+        productsRef.current = resetProducts;
+        setProducts(resetProducts);
+      }
+      processingProductIdsRef.current = new Set(productsToProcess.map((product) => product.id));
+      if (duplicateCount) {
+        if (!productsToProcess.length) {
+          processingRef.current = false;
+          setIsProcessing(false);
+          onShowToast(`${storeName}历史库已收录当前全部商品。请勾选要重新生成的重复商品。`, 'info');
+          return;
         }
+        onShowToast(includeSelectedDuplicates
+          ? `将重新生成 ${selectedDuplicates.length} 款已选重复商品。`
+          : `已跳过 ${duplicateCount} 款 ${storeName}历史重复商品；勾选后可继续生成。`, 'info');
       }
     } catch (error) {
       console.warn('读取店铺去重历史失败:', error);
@@ -781,6 +817,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     // Collect pending subtasks up to CONCURRENCY (按每款商品随机设定的 4 色先后顺序排队)
     const tasksToRun: { productId: string; color: ColorKey }[] = [];
     for (const p of productsRef.current) {
+      if (processingProductIdsRef.current && !processingProductIdsRef.current.has(p.id)) continue;
       if (tasksToRun.length + runningCount >= CONCURRENCY) break;
       const order = p.colorOrder || ['white', 'black'];
       for (const color of order) {
@@ -1830,7 +1867,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <button
                   type="button"
                   disabled={products.length === 0}
-                  onClick={startProcessing}
+                  onClick={() => startProcessing(false)}
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-40"
                 >
                   <Play className="w-4 h-4 fill-current" />
@@ -1946,6 +1983,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   </span>
                 </div>
               </div>
+              {duplicateProductIds.size > 0 && (
+                <div className="flex flex-wrap items-center gap-2 border border-amber-200 bg-amber-50 px-3 py-2 rounded-lg" role="group" aria-label="重复商品选择">
+                  <span className="text-xs font-semibold text-amber-900">检测到 {duplicateProductIds.size} 款重复商品</span>
+                  <button type="button" disabled={isProcessing} onClick={() => setSelectedDuplicateIds(new Set(duplicateProductIds))} className="px-2.5 py-1 border border-amber-300 bg-white text-amber-900 text-xs font-medium rounded hover:bg-amber-100 disabled:opacity-50">全选重复项</button>
+                  <button type="button" disabled={isProcessing} onClick={() => setSelectedDuplicateIds(new Set())} className="px-2.5 py-1 border border-slate-300 bg-white text-slate-700 text-xs font-medium rounded hover:bg-slate-50 disabled:opacity-50">清空选择</button>
+                  <button type="button" disabled={!selectedDuplicateIds.size || isProcessing} onClick={() => startProcessing(true)} className="px-3 py-1.5 bg-amber-700 text-white text-xs font-semibold rounded hover:bg-amber-800 disabled:opacity-50">生成所选重复商品 ({selectedDuplicateIds.size})</button>
+                </div>
+              )}
 
               {viewLayout === 'card' ? (
                 /* 画廊卡片视图：大图直观展示原图与 4 种颜色款式 */
@@ -1977,6 +2022,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                           <span className="text-xs font-mono font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">
                             #{idx + 1}
                           </span>
+                          {duplicateProductIds.has(item.id) && (
+                            <label className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-800">
+                              <input type="checkbox" checked={selectedDuplicateIds.has(item.id)} disabled={isProcessing} onChange={(event) => setSelectedDuplicateIds((selected) => { const next = new Set(selected); event.target.checked ? next.add(item.id) : next.delete(item.id); return next; })} aria-label={`选择重复商品 ${item.title}`} />
+                              重复
+                            </label>
+                          )}
                           <button
                             type="button"
                             onClick={() => toggleProductColorOrder(item.id)}
@@ -2274,6 +2325,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                       <div className="flex items-center gap-3 min-w-0 flex-1">
                         <div className="flex flex-col items-center gap-0.5 shrink-0">
                           <span className="text-xs font-mono text-slate-400 w-6 text-center">#{idx + 1}</span>
+                          {duplicateProductIds.has(item.id) && <label className="inline-flex items-center gap-1 text-[9px] text-amber-800 whitespace-nowrap"><input type="checkbox" checked={selectedDuplicateIds.has(item.id)} disabled={isProcessing} onChange={(event) => setSelectedDuplicateIds((selected) => { const next = new Set(selected); event.target.checked ? next.add(item.id) : next.delete(item.id); return next; })} aria-label={`选择重复商品 ${item.title}`} />重复</label>}
                           <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
                             R{startRow}-{endRow}
                           </span>
