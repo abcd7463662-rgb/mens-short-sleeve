@@ -807,6 +807,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     // Count currently running subtasks across all 4 colors
     let runningCount = 0;
     productsRef.current.forEach((p) => {
+      if (processingProductIdsRef.current && !processingProductIdsRef.current.has(p.id)) return;
       if (p.whiteStatus === 'running') runningCount++;
       if (p.blackStatus === 'running') runningCount++;
       if (p.apricotStatus === 'running') runningCount++;
