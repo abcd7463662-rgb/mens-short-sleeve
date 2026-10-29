@@ -19,9 +19,13 @@ export function exportCombinedTemplateInWorker({ template, products, gender, cat
     const finish = (callback: () => void) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeoutId);
       worker.terminate();
       callback();
     };
+    const timeoutId = setTimeout(() => {
+      finish(() => reject(new Error('生成 Excel 超时，请重试。')));
+    }, 180000);
 
     worker.onmessage = (event: MessageEvent) => {
       const message = event.data;

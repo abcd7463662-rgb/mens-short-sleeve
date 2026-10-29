@@ -11,6 +11,7 @@ export interface TranslationResponse {
   translations?: string[];
   originalText?: string;
   error?: string;
+  failedIndexes?: number[];
 }
 
 /**
@@ -115,8 +116,20 @@ export async function translateBatchTitlesWithGoogle(
     if (res.ok) {
       const data: TranslationResponse = await res.json();
       if (data.success && Array.isArray(data.translations)) {
-        if (onProgress) onProgress(titles.length, titles.length);
-        return data.translations.map((trans) => cleanEnglishTitle(trans));
+        const failed = new Set(data.failedIndexes || []);
+        const results: string[] = [];
+        let completed = 0;
+        for (let i = 0; i < cleanedTitles.length; i++) {
+          const translated = failed.has(i) ? '' : cleanEnglishTitle(data.translations[i] || '');
+          if (translated) {
+            results.push(translated);
+            completed++;
+          } else {
+            results.push('');
+          }
+          if (onProgress) onProgress(completed, titles.length);
+        }
+        return results;
       }
     }
   } catch (err) {

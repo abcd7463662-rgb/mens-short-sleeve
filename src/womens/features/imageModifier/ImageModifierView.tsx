@@ -246,8 +246,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     localStorage.setItem('WOMEN_PRODUCT_CATEGORY', productCategory);
   }, [productCategory]);
 
-  // 3. 处理与导出状态 (支持最高 12 并发)
-  const CONCURRENCY = 12;
+  // 3. 处理与导出状态 (支持最高 4 并发，与后端 ImgBB 队列对齐)
+  const CONCURRENCY = 4;
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
   const [isRepairingSportWorkbook, setIsRepairingSportWorkbook] = useState(false);
@@ -551,7 +551,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     try {
       const titles = list.map((p) => cleanChineseTitle(p.title || ''));
       const translated = await translateBatchTitlesWithGoogle(titles, 'en');
-      const translationById = new Map(list.map((item, index) => [item.id, cleanEnglishTitle(translated[index] || titles[index])]));
+      const failedCount = translated.filter((text) => !text.trim()).length;
+      const translationById = new Map(
+        list
+          .map((item, index) => [item.id, cleanEnglishTitle(translated[index] || '')] as const)
+          .filter(([, translation]) => Boolean(translation))
+      );
 
       setProducts((prev) =>
         prev.map((item) => {
@@ -567,7 +572,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         })
       );
 
-      onShowToast(`谷歌翻译完成！已自动剔除「舒适色彩/安慰色彩/棉/棉页/商品图片/®」，并填入 D6 及各行 D 列`, 'success');
+      onShowToast(
+        failedCount
+          ? `已完成 ${list.length - failedCount} 个标题翻译，另有 ${failedCount} 个未成功，可再次点击翻译重试。`
+          : `谷歌翻译完成！已自动剔除「舒适色彩/安慰色彩/棉/棉页/商品图片/®」，并填入 D6 及各行 D 列`,
+        failedCount ? 'info' : 'success'
+      );
     } catch (err: any) {
       onShowToast(err.message || '谷歌翻译服务调用失败，请重试', 'error');
     } finally {
@@ -660,7 +670,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       });
 
       setProducts(items);
-      onShowToast(`成功导入商品信息！已自动随机 4 色（白/黑/杏/绿）排布并剔除标题中「舒适色彩/安慰色彩/棉/棉页/商品图片/®」，正在调用谷歌翻译...`, 'success');
+      onShowToast(`成功导入商品信息！已自动随机白色、黑色顺序并清理标题，正在调用谷歌翻译...`, 'success');
 
       // 自动触发谷歌翻译 API 异步批量翻译，将英文标题自动填入 D6 / D 列
       setTimeout(() => {
@@ -721,7 +731,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
   };
 
-  // --- 3. 模板导出与 6 并发四色生图 (gpt-image-2.5 + 自动 1340*1785 白色背景填充) ---
+  // --- 3. 模板导出与 4 并发双色生图 (gpt-image-2.5 + 自动 1340*1785 白色背景填充) ---
   const startProcessing = async (includeSelectedDuplicates = false) => {
     if (products.length === 0) {
       onShowToast('请先导入商品信息表格', 'error');
@@ -900,24 +910,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         paddedSuccess = true;
         paddedBlob = padded.blob;
 
-        // 1. 持久化存储至服务端托管目录，生成 100% 确切为 1340*1785 的公网可访问/可下载直链
-        try {
-          const safeTitle = (product.title || 'product').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_');
-          const hostedRes = await saveHostedImage(
-            padded.dataUri,
-            `${safeTitle}_${productId}_${color}_1340x1785.JPG`
-          );
-          if (hostedRes?.url) {
-            finalImageUrl = hostedRes.url;
-          } else {
-            finalImageUrl = padded.dataUri;
-          }
-        } catch (saveErr) {
-          console.warn('Failed to save hosted image, using dataUri:', saveErr);
-          finalImageUrl = padded.dataUri;
-        }
-
-        // 核心固定机制：生成填白完成后，100% 自动直传腾讯云 COS (国内免翻墙秒开，Temu/ERP秒读通过)
+        // 填白完成后直接上传腾讯云 COS。COS 可用时不再额外写一份服务器托管副本，
+        // 避免同一张图的 base64 被连续上传两次而拖慢整体流程。
         const currentBucket = (cosBucket || 'yxig-1500925420').trim();
         const currentRegion = (cosRegion || 'ap-guangzhou').trim();
         if (currentBucket) {
@@ -934,7 +928,20 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           } catch (cosErr) {
             console.error('[Tencent COS Auto-Upload failed after retries]:', cosErr);
             cosUploadError = cosErr instanceof Error ? cosErr.message : String(cosErr);
-            onShowToast(`图片已生成，但 COS 上传请求失败：${cosUploadError}`, 'error');
+            onShowToast(`图片已生成，但 COS 上传失败：${cosUploadError}。当前使用临时链接，可稍后点击“同步图片”。`, 'error');
+            finalImageUrl = padded.dataUri;
+          }
+        } else {
+          try {
+            const safeTitle = (product.title || 'product').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_');
+            const hostedRes = await saveHostedImage(
+              padded.dataUri,
+              `${safeTitle}_${productId}_${color}_1340x1785.JPG`
+            );
+            finalImageUrl = hostedRes?.url || padded.dataUri;
+          } catch (saveErr) {
+            console.warn('Failed to save hosted image, using dataUri:', saveErr);
+            finalImageUrl = padded.dataUri;
           }
         }
       } catch (padErr) {
@@ -1497,8 +1504,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
   };
 
-  // Stats
-  const completedCount = products.filter((p) => p.whiteUrl && p.blackUrl && p.apricotUrl && p.greenUrl).length;
+  // Stats：女士类目采用白色、黑色两色，完成状态以两色齐备为准
+  const completedCount = products.filter((p) => p.whiteUrl && p.blackUrl).length;
   const whiteDoneCount = products.filter((p) => p.whiteUrl).length;
   const blackDoneCount = products.filter((p) => p.blackUrl).length;
   const apricotDoneCount = products.filter((p) => p.apricotUrl).length;
@@ -1743,7 +1750,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               </div>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="text-sm font-semibold text-slate-900">商品处理与四色图片</h2>
+                  <h2 className="text-sm font-semibold text-slate-900">商品处理与双色图片</h2>
                   <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
                     模型：gpt-image-2.5
                   </span>
@@ -1756,7 +1763,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                     100% 确切 1340×1785 白底直链与下载
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mt-1">白、黑、杏、绿四色图片 · 英文标题 · 上架文件</p>
+                <p className="text-xs text-slate-500 mt-1">白色、黑色两色图片 · 英文标题 · 上架文件</p>
               </div>
             </div>
 
@@ -1933,7 +1940,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 <span>•</span>
                 <span className="flex items-center gap-1 text-purple-700 font-medium">
                   <Shuffle className="w-3.5 h-3.5 text-purple-600" />
-                  四色排布: <strong>随机排序</strong> (白/黑/杏/绿)
+                  双色排布: <strong>随机排序</strong> (白/黑)
                 </span>
                 <span>•</span>
                 <span className="flex items-center gap-1 text-indigo-700 font-medium">
@@ -1951,25 +1958,15 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   黑款: <strong>{blackDoneCount}</strong> / {products.length}
                 </span>
                 <span>•</span>
-                <span className="flex items-center gap-1 text-slate-700">
-                  <span className="w-2 h-2 rounded-full bg-amber-400 inline-block"></span>
-                  杏款: <strong>{apricotDoneCount}</strong> / {products.length}
-                </span>
-                <span>•</span>
-                <span className="flex items-center gap-1 text-slate-700">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-                  绿款: <strong>{greenDoneCount}</strong> / {products.length}
-                </span>
-                <span>•</span>
                 <span className="flex items-center gap-1 text-emerald-700 font-bold">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  四色全就绪: {completedCount} / {products.length}
+                  双色全就绪: {completedCount} / {products.length}
                 </span>
               </div>
 
               <div className="flex items-center gap-2 text-[11px] text-slate-500">
                 <span className="inline-block w-2 h-2 rounded-full bg-emerald-500"></span>
-                <span>标题填入 C6，谷歌翻译英文填入 D6，白色/黑色/杏色/绿色按随机顺序写入 EA 列及各 SKU</span>
+                <span>标题填入 C6，谷歌翻译英文填入 D6，白色与黑色按随机顺序写入图片列及各 SKU</span>
               </div>
             </div>
           )}
