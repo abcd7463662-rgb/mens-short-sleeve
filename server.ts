@@ -1158,7 +1158,8 @@ async function startServer() {
     }
     try {
       const safeFilename = path.basename(String(req.query.filename || 'image.jpg')).replace(/[^a-zA-Z0-9._-]/g, '_');
-      const key = `direct/${Date.now()}_${Math.random().toString(36).slice(2, 10)}_${safeFilename}`;
+      // 直传对象放在桶根目录；时间戳和随机串避免同名文件互相覆盖。
+      const key = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}_${safeFilename}`;
       const COS = (await import('cos-nodejs-sdk-v5')).default;
       const clientKey = `${secretId}:${bucket}:${region}`;
       let cos = cosClientCache.get(clientKey);
