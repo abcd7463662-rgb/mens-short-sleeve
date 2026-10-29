@@ -1146,6 +1146,33 @@ async function startServer() {
     }
   });
 
+  // 浏览器直传签名：服务端只返回当前对象的短时授权，不暴露 SecretKey。
+  app.get('/api/cos/upload-sign', async (req, res) => {
+    const secretId = process.env.TENCENT_COS_SECRET_ID;
+    const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+    const bucket = String(req.query.bucket || process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
+    const region = String(req.query.region || process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim();
+    if (!secretId || !secretKey || !bucket) {
+      res.status(503).json({ error: '服务端尚未配置腾讯云 COS' });
+      return;
+    }
+    try {
+      const safeFilename = path.basename(String(req.query.filename || 'image.jpg')).replace(/[^a-zA-Z0-9._-]/g, '_');
+      const key = `direct/${Date.now()}_${Math.random().toString(36).slice(2, 10)}_${safeFilename}`;
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const clientKey = `${secretId}:${bucket}:${region}`;
+      let cos = cosClientCache.get(clientKey);
+      if (!cos) {
+        cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+        cosClientCache.set(clientKey, cos);
+      }
+      const authorization = cos.getAuthorization({ Method: 'PUT', Key: key, Bucket: bucket, Region: region, Expires: 600 });
+      res.json({ success: true, key, authorization, url: `https://${bucket}.cos.${region}.myqcloud.com/${encodeURIComponent(key)}`, expiresIn: 600 });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '生成 COS 上传签名失败' });
+    }
+  });
+
   /**
    * COS 连通性诊断：用一个 1x1 像素试传，返回真实的错误码与 RequestId，
    * 便于区分是密钥、地域、桶名、ACL 还是网络问题。

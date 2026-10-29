@@ -121,6 +121,20 @@ async function uploadImageToCos(
 
   for (let attempt = 1; attempt <= COS_UPLOAD_MAX_ATTEMPTS; attempt++) {
     try {
+      if (blob) {
+        const signResponse = await fetch(`/api/cos/upload-sign?filename=${encodeURIComponent(String(payload.filename || 'image.jpg'))}&bucket=${encodeURIComponent(String(payload.bucket || ''))}&region=${encodeURIComponent(String(payload.region || ''))}`, { signal: AbortSignal.timeout(15000) });
+        const sign = await signResponse.json().catch(() => ({}));
+        if (signResponse.ok && sign.success && sign.authorization && sign.url) {
+          const directResponse = await fetch(sign.url, {
+            method: 'PUT',
+            headers: { Authorization: sign.authorization, 'Content-Type': 'image/jpeg' },
+            body: blob,
+            signal: AbortSignal.timeout(60000),
+          });
+          if (directResponse.ok) return { success: true, url: sign.url };
+          throw new Error(`COS 直传失败 HTTP ${directResponse.status}`);
+        }
+      }
       // 有填白后的 Blob 时走二进制直传，避免 base64 体积膨胀
       const response = blob
         ? await fetch(
