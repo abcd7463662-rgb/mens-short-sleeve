@@ -136,12 +136,26 @@ export async function translateBatchTitlesWithGoogle(
     console.warn('Batch translate endpoint error, falling back to sequential translation:', err);
   }
 
-  // Fallback: translate one by one
-  const results: string[] = [];
-  for (let i = 0; i < cleanedTitles.length; i++) {
-    const t = await translateTitleWithGoogle(cleanedTitles[i], targetLang);
-    results.push(cleanEnglishTitle(t));
-    if (onProgress) onProgress(i + 1, titles.length);
-  }
+  // Fallback: 有限并发逐条翻译，避免大批量标题时退化成纯串行
+  const results: string[] = new Array(cleanedTitles.length).fill('');
+  let cursor = 0;
+  let completed = 0;
+  const FALLBACK_CONCURRENCY = 4;
+  const worker = async () => {
+    while (cursor < cleanedTitles.length) {
+      const i = cursor++;
+      try {
+        const t = await translateTitleWithGoogle(cleanedTitles[i], targetLang);
+        results[i] = cleanEnglishTitle(t);
+      } catch {
+        results[i] = '';
+      }
+      completed++;
+      if (onProgress) onProgress(completed, titles.length);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(FALLBACK_CONCURRENCY, cleanedTitles.length) }, () => worker())
+  );
   return results;
 }

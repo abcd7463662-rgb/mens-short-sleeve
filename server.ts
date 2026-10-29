@@ -965,8 +965,7 @@ async function startServer() {
         const COS = (await import('cos-nodejs-sdk-v5')).default;
         const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
         const put = (Key: string) => new Promise<void>((resolve, reject) => cos.putObject({ Bucket: settings.bucket, Region: settings.region, Key, Body: payload, ContentType: 'application/json; charset=utf-8' }, (err: any) => err ? reject(err) : resolve()));
-        await put(storeName);
-        await put(storeName + '.json');
+        await Promise.all([put(storeName), put(storeName + '.json')]);
         const localDir = path.join(process.cwd(), 'store_records');
         fs.mkdirSync(localDir, { recursive: true });
         fs.writeFileSync(path.join(localDir, storeName + '.json'), payload);
@@ -1385,31 +1384,52 @@ async function startServer() {
         const results: string[] = new Array(texts.length).fill('');
         const failed: number[] = [];
 
-        for (let i = 0; i < texts.length; i++) {
-          const source = String(texts[i] ?? '');
-          if (!source.trim()) {
-            results[i] = '';
-            continue;
+        // 并发翻译：translateSingleText 内部已有 runWithTranslateSlot 限流，
+        // 这里若逐个 await，限流槽位就形同虚设，100 条标题会变成 100 次串行往返。
+        const BATCH_CONCURRENCY = Math.max(1, Number(process.env.TRANSLATE_CONCURRENCY) || 8);
+        let cursor = 0;
+        const translateWorker = async () => {
+          while (cursor < texts.length) {
+            const i = cursor++;
+            const source = String(texts[i] ?? '');
+            if (!source.trim()) {
+              results[i] = '';
+              continue;
+            }
+            try {
+              results[i] = await translateSingleText(source);
+            } catch {
+              failed.push(i);
+            }
           }
-          try {
-            results[i] = await translateSingleText(source);
-          } catch {
-            failed.push(i);
-          }
-        }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(BATCH_CONCURRENCY, texts.length) }, () => translateWorker())
+        );
 
         // Second pass over the stragglers: the throttle window has usually
         // cleared by now, and this is what turns "many titles untranslated"
         // into a clean result.
-        for (const i of [...failed]) {
-          await sleep(600);
-          try {
-            results[i] = await translateSingleText(String(texts[i] ?? ''));
-            failed.splice(failed.indexOf(i), 1);
-          } catch {
-            results[i] = '';
+        await sleep(600);
+        const retryQueue = [...failed];
+        const stillFailed: number[] = [];
+        let retryCursor = 0;
+        const retryWorker = async () => {
+          while (retryCursor < retryQueue.length) {
+            const i = retryQueue[retryCursor++];
+            try {
+              results[i] = await translateSingleText(String(texts[i] ?? ''));
+            } catch {
+              results[i] = '';
+              stillFailed.push(i);
+            }
           }
-        }
+        };
+        await Promise.all(
+          Array.from({ length: Math.min(BATCH_CONCURRENCY, retryQueue.length) }, () => retryWorker())
+        );
+        failed.length = 0;
+        failed.push(...stillFailed.sort((a, b) => a - b));
 
         res.json({
           success: true,
@@ -1705,7 +1725,7 @@ async function startServer() {
         return;
       }
 
-      const response = await fetch(targetUrl);
+      const response = await fetch(targetUrl, { signal: AbortSignal.timeout(20000) });
       if (!response.ok) {
         res.status(response.status).json({ error: '获取远程图片失败' });
         return;
