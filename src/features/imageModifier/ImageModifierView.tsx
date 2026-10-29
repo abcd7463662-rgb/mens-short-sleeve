@@ -712,6 +712,36 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       {/* 主界面空间 */}
       <div className="space-y-5">
+        <div className="rounded-lg border border-blue-100 bg-white px-4 py-3" role="status" aria-live="polite">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`rounded px-2.5 py-1 font-semibold ${products.length ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-600 text-white'}`}>
+              1 表格导入 {products.length ? `${products.length} 款` : isParsingTable ? '进行中' : '待上传'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${isTranslatingAll ? 'bg-blue-600 text-white' : products.length && translatedCount >= products.length ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+              2 标题翻译 {products.length ? `${isTranslatingAll ? translationProgress?.done || 0 : translatedCount} / ${products.length}` : '待导入'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${templateFile ? 'bg-emerald-50 text-emerald-700' : templateLoadProgress ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              3 模板准备 {templateFile ? '已就绪' : templateLoadProgress ? '读取中' : '待上传'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${isBatchExporting ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              4 模板导出 {isBatchExporting ? batchExportPhase || '进行中' : '待导出'}
+            </span>
+          </div>
+          {isTranslatingAll && translationProgress?.total ? (
+            <div className="mt-2">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
+                <span>正在翻译标题 {translationProgress.done} / {translationProgress.total}</span>
+                <span>{Math.round((translationProgress.done / translationProgress.total) * 100)}%</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${Math.round((translationProgress.done / translationProgress.total) * 100)}%` }} />
+              </div>
+            </div>
+          ) : null}
+        </div>
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-blue-100 pb-4">
           <div>
             <h1 className="text-lg font-semibold text-slate-900">男士短袖 · 商品上架</h1>

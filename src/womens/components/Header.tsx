@@ -13,7 +13,7 @@ export const Header: React.FC = () => {
           <div className="flex items-center gap-2">
             <span className="text-base font-bold text-slate-900 tracking-tight">电商上架模板生成工作台</span>
             <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
-              12 并发极速版
+              双色流程
             </span>
           </div>
           <p className="text-[11px] text-slate-500 hidden sm:block">

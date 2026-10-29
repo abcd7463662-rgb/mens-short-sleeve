@@ -253,6 +253,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const [isRepairingSportWorkbook, setIsRepairingSportWorkbook] = useState(false);
   const [batchExportPhase, setBatchExportPhase] = useState('');
   const [isTranslatingAll, setIsTranslatingAll] = useState<boolean>(false);
+  const [translationProgress, setTranslationProgress] = useState<{ done: number; total: number; failed: number } | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitleText, setEditTitleText] = useState<string>('');
@@ -546,11 +547,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
 
     setIsTranslatingAll(true);
+    setTranslationProgress({ done: 0, total: list.length, failed: 0 });
     onShowToast(`正在调用谷歌翻译 API 翻译 ${list.length} 个商品标题...`, 'info');
 
     try {
       const titles = list.map((p) => cleanChineseTitle(p.title || ''));
-      const translated = await translateBatchTitlesWithGoogle(titles, 'en');
+      const translated = await translateBatchTitlesWithGoogle(titles, 'en', (done, total) => {
+        setTranslationProgress((prev) => ({ done, total, failed: prev?.failed || 0 }));
+      });
       const failedCount = translated.filter((text) => !text.trim()).length;
       const translationById = new Map(
         list
@@ -572,6 +576,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         })
       );
 
+      setTranslationProgress({ done: list.length, total: list.length, failed: failedCount });
+
       onShowToast(
         failedCount
           ? `已完成 ${list.length - failedCount} 个标题翻译，另有 ${failedCount} 个未成功，可再次点击翻译重试。`
@@ -579,6 +585,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         failedCount ? 'info' : 'success'
       );
     } catch (err: any) {
+      setTranslationProgress({ done: 0, total: list.length, failed: list.length });
       onShowToast(err.message || '谷歌翻译服务调用失败，请重试', 'error');
     } finally {
       setIsTranslatingAll(false);
@@ -673,9 +680,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(`成功导入商品信息！已自动随机白色、黑色顺序并清理标题，正在调用谷歌翻译...`, 'success');
 
       // 自动触发谷歌翻译 API 异步批量翻译，将英文标题自动填入 D6 / D 列
-      setTimeout(() => {
-        handleTranslateAll(items);
-      }, 300);
+      void handleTranslateAll(items);
     } catch (err: any) {
       onShowToast(err.message || '商品表格解析失败，请检查文件', 'error');
     } finally {
@@ -826,7 +831,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
     if (runningCount >= CONCURRENCY) return;
 
-    // Collect pending subtasks up to CONCURRENCY (按每款商品随机设定的 4 色先后顺序排队)
+    // Collect pending subtasks up to CONCURRENCY (按每款商品随机设定的白/黑先后顺序排队)
     const tasksToRun: { productId: string; color: ColorKey }[] = [];
     for (const p of productsRef.current) {
       if (processingProductIdsRef.current && !processingProductIdsRef.current.has(p.id)) continue;
@@ -1160,7 +1165,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       onShowToast(
         localFolderPath.trim()
           ? `成功导出「${cleanedTitle}」标准上架模板（已自动将DS列替换为本地链接：${localFolderPath}）！`
-          : `成功导出「${cleanedTitle}」标准上架模板（含 C6/D6 及 4 色随机顺序）！`,
+          : `成功导出「${cleanedTitle}」标准上架模板（含 C6/D6 及双色随机顺序）！`,
         'success'
       );
     } catch (err: any) {
@@ -1175,7 +1180,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     onShowToast(`已删除商品「${product.title}」`, 'success');
   };
 
-  // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机 4 色顺序）
+  // 导出全部商品整合在同一个表格内（C6填中文，D6填谷歌翻译英文标题，每款商品随机白/黑顺序）
   const handleExportCombined = async (forceExport = false) => {
     if (!templateFile || loadedTemplateCategory !== productCategory) {
       onShowToast('请先上传并保存' + activeCategory.label + '上架模板。', 'error');
@@ -1353,7 +1358,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     );
 
     if (readyProducts.length === 0) {
-      onShowToast('暂无可上传的图片，请先在下方点击【开始生成】四色图！', 'error');
+      onShowToast('暂无可上传的图片，请先在下方点击【开始生成】双色图！', 'error');
       return;
     }
 
@@ -1506,6 +1511,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
   // Stats：女士类目采用白色、黑色两色，完成状态以两色齐备为准
   const completedCount = products.filter((p) => p.whiteUrl && p.blackUrl).length;
+  const totalColorTasks = products.length * 2;
+  const finishedColorTasks = products.reduce(
+    (count, p) => count + (p.whiteStatus === 'success' ? 1 : 0) + (p.blackStatus === 'success' ? 1 : 0),
+    0
+  );
+  const generationPercent = totalColorTasks ? Math.round((finishedColorTasks / totalColorTasks) * 100) : 0;
+  const translatedDone = translationProgress?.done || products.filter((p) => p.englishTitle).length;
+  const translatedTotal = translationProgress?.total || products.length;
   const whiteDoneCount = products.filter((p) => p.whiteUrl).length;
   const blackDoneCount = products.filter((p) => p.blackUrl).length;
   const apricotDoneCount = products.filter((p) => p.apricotUrl).length;
@@ -1548,6 +1561,43 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       {/* 极简主三步工作流 */}
       <div className="space-y-5">
+        <div className="rounded-lg border border-blue-100 bg-white px-4 py-3" role="status" aria-live="polite">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className={`rounded px-2.5 py-1 font-semibold ${products.length ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-600 text-white'}`}>
+              1 表格导入 {products.length ? `${products.length} 款` : isParsingTable ? '进行中' : '待上传'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${isTranslatingAll ? 'bg-blue-600 text-white' : translatedDone && !translationProgress?.failed && translatedDone >= translatedTotal ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+              2 标题翻译 {translatedTotal ? `${translatedDone} / ${translatedTotal}` : '待导入'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${isProcessing ? 'bg-blue-600 text-white' : products.length && completedCount === products.length ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
+              3 图片生成 {totalColorTasks ? `${finishedColorTasks} / ${totalColorTasks}` : '待开始'}
+            </span>
+            <span className="text-slate-300">→</span>
+            <span className={`rounded px-2.5 py-1 font-semibold ${isBatchExporting ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
+              4 模板导出 {isBatchExporting ? batchExportPhase || '进行中' : '待导出'}
+            </span>
+          </div>
+          {(isTranslatingAll || isProcessing) && (
+            <div className="mt-2">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
+                <span>{isTranslatingAll ? `正在翻译标题 ${translatedDone} / ${translatedTotal}` : `正在生成图片 ${finishedColorTasks} / ${totalColorTasks}`}</span>
+                <span>{isTranslatingAll
+                  ? `${translatedTotal ? Math.round((translatedDone / translatedTotal) * 100) : 0}%`
+                  : `${generationPercent}%`}</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-blue-600 transition-all duration-300" style={{ width: `${isTranslatingAll
+                  ? (translatedTotal ? Math.round((translatedDone / translatedTotal) * 100) : 0)
+                  : generationPercent}%` }} />
+              </div>
+            </div>
+          )}
+          {translationProgress?.failed ? (
+            <p className="mt-1.5 text-[11px] text-amber-800">{translationProgress.failed} 个标题未翻译成功，可点击“谷歌翻译全部标题”重试。</p>
+          ) : null}
+        </div>
         <div className="border-b border-blue-100 pb-4">
           <h1 className="text-lg font-semibold text-slate-900">{activeCategory.label} · 商品上架</h1>
                   <p className="mt-0.5 text-xs text-slate-500">选择类目，导入商品和对应模板，再生成图片并导出</p>
@@ -1791,10 +1841,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   type="button"
                   onClick={handleShuffleColorOrder}
                   className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs sm:text-sm font-semibold border border-purple-200 cursor-pointer shadow-2xs transition-colors"
-                  title="随机重新打乱全部商品的 4 色（白、黑、杏、绿）排布先后顺序"
+                  title="随机重新打乱全部商品的白、黑排布先后顺序"
                 >
                   <Shuffle className="w-3.5 h-3.5 text-purple-600" />
-                  <span>重新随机四色顺序</span>
+                  <span>重新随机双色顺序</span>
                 </button>
               )}
 
@@ -2035,7 +2085,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                             type="button"
                             onClick={() => toggleProductColorOrder(item.id)}
                             className="text-[10px] px-2 py-0.5 rounded-md font-mono font-medium border bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100 flex items-center gap-1 cursor-pointer transition-colors shrink-0"
-                            title="点击可循环切换该商品的 4 色先后排布顺序"
+                            title="点击可循环切换该商品的白、黑先后排布顺序"
                           >
                             <Shuffle className="w-2.5 h-2.5" />
                             <span>
