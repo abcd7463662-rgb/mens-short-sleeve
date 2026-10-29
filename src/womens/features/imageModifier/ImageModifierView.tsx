@@ -260,8 +260,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     localStorage.setItem('WOMEN_PRODUCT_CATEGORY', productCategory);
   }, [productCategory]);
 
-  // 3. 处理与导出状态 (支持最高 4 并发，与后端 ImgBB 队列对齐)
-  const CONCURRENCY = 4;
+  // 3. 处理与导出状态 (支持最高 12 并发，与后端生图队列对齐)
+  const CONCURRENCY = 12;
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
   const [isRepairingSportWorkbook, setIsRepairingSportWorkbook] = useState(false);
@@ -1204,10 +1204,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
 
     setIsBatchExporting(true);
-    setBatchExportPhase('正在读取商品和模板...');
+    setBatchExportPhase('正在校验图片与 COS 链接...');
     try {
       const storeName = selectedStore;
+      setBatchExportPhase('正在读取去重历史...');
       const knownUrls = await readStoreHistory(storeName);
+      setBatchExportPhase('正在比对去重记录...');
       const { uniqueItems: uniqueProducts, duplicateCount } = filterDuplicateUrls(products, (product) => product.imageUrl, knownUrls);
       const exportProducts = forceExport ? products : uniqueProducts;
       if (duplicateCount && forceExport) onShowToast(`强制导出模式：本次将包含 ${duplicateCount} 款历史重复商品。`, 'info');
@@ -1273,6 +1275,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const outputName = products.length > 1
         ? `${activeCategory.label}_上架模板_共${products.length}款.xlsx`
         : `${(inputs[0]?.title || '商品').slice(0, 20).replace(/[/\?%*:|"<>]/g, '_')}_标准上架模板.xlsx`;
+      setBatchExportPhase(`正在写入 ${inputs.length} 款商品...`);
       const { buffer, fileName } = await exportCombinedTemplateInWorker({
         template: templateFile,
         products: inputs,

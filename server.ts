@@ -41,7 +41,7 @@ async function withMutationLock<T>(key: string, action: () => Promise<T>): Promi
 }
 
 const runWithImageSlot = (() => {
-  const limit = 4;
+  const limit = Math.max(1, Number(process.env.IMAGE_API_CONCURRENCY) || 12);
   let available = limit;
   const waiters: Array<() => void> = [];
   return async <T>(task: () => Promise<T>): Promise<T> => {
@@ -295,7 +295,7 @@ async function restoreTemplateOnce(): Promise<boolean> {
  * whole server at two in-flight calls and queue the rest.
  */
 const runWithTranslateSlot = (() => {
-  const limit = 2;
+  const limit = Math.max(1, Number(process.env.TRANSLATE_CONCURRENCY) || 8);
   let available = limit;
   const waiters: Array<() => void> = [];
 
@@ -913,23 +913,25 @@ async function startServer() {
       try {
         const COS = (await import('cos-nodejs-sdk-v5')).default;
         const cos = new COS({ SecretId: settings.secretId, SecretKey: settings.secretKey });
-        const getObjectBody = (Key: string) => new Promise<Buffer | null>((resolve, reject) => cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any, data: any) => {
+        const getObjectBody = (Key: string) => new Promise<Buffer | null>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(null), 6000);
+          cos.getObject({ Bucket: settings.bucket, Region: settings.region, Key }, (err: any, data: any) => {
+          clearTimeout(timer);
           if (!err) {
             resolve(!data?.Body ? null : Buffer.isBuffer(data.Body) ? data.Body : Buffer.from(data.Body));
             return;
           }
           if (err.statusCode === 404 || err.code === 'NoSuchKey' || err.code === 'NotFound') resolve(null);
           else reject(err);
-        }));
-        for (const keyName of keyNames) {
-          const body = await getObjectBody(keyName);
+          });
+        });
+        const keys = keyNames.flatMap((keyName) => [keyName, keyName + '.json']);
+        const bodies = await Promise.all(keys.map((key) => getObjectBody(key).catch(() => null)));
+        bodies.forEach((body) => {
           if (body) parseStoreLinks(body.toString('utf8')).forEach((url) => collected.add(url));
-          const jsonBody = await getObjectBody(keyName + '.json');
-          if (jsonBody) parseStoreLinks(jsonBody.toString('utf8')).forEach((url) => collected.add(url));
-        }
+        });
       } catch (error) {
-        console.warn('COS store links read failed:', error);
-        throw new Error('腾讯云去重历史读取失败，请检查 COS 配置或稍后重试');
+        console.warn('COS store links read failed, falling back to local cache:', error);
       }
     }
     for (const keyName of keyNames) {

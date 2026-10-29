@@ -33,7 +33,9 @@ async function readStoreHistoryInternal(storeName: StoreName): Promise<string[]>
   const pending = storeHistoryRequests.get(storeName);
   if (pending) return pending;
   const request = (async () => {
-    const response = await fetch('/api/cos/store-links/read?storeName=' + encodeURIComponent(storeName));
+  const response = await fetch('/api/cos/store-links/read?storeName=' + encodeURIComponent(storeName), {
+    signal: AbortSignal.timeout(15000),
+  });
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
     throw new Error(result.error || '读取店铺去重历史失败');
