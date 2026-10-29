@@ -101,6 +101,18 @@ export interface ProductItem {
 
 const COS_UPLOAD_MAX_ATTEMPTS = 3;
 
+function blobToDataUri(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('读取图片数据失败'));
+    };
+    reader.onerror = () => reject(new Error('读取图片数据失败'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 async function uploadImageToCos(
   payload: Record<string, unknown>,
   blob?: Blob | null
@@ -128,9 +140,31 @@ async function uploadImageToCos(
           });
       const result = await response.json().catch(() => ({}));
       if (response.ok && result.success && result.url) return result;
-      throw new Error(result.error || `HTTP ${response.status}`);
+      const detail = [result.error || `HTTP ${response.status}`, result.code, result.requestId]
+        .filter(Boolean)
+        .join(' | ');
+      throw new Error(detail);
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
+      // 二进制直传失败时回退到 JSON/base64 上传（与大码短袖一致的路径）
+      if (blob && attempt === 1) {
+        try {
+          const dataUri = await blobToDataUri(blob);
+          const fallback = await fetch('/api/cos/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, imageBase64: dataUri }),
+            signal: AbortSignal.timeout(60000),
+          });
+          const fallbackResult = await fallback.json().catch(() => ({}));
+          if (fallback.ok && fallbackResult.success && fallbackResult.url) {
+            console.warn('二进制直传失败，已回退到 JSON 上传成功:', lastError.message);
+            return fallbackResult;
+          }
+        } catch (fallbackError) {
+          console.warn('COS JSON 回退上传也失败:', fallbackError);
+        }
+      }
       if (attempt < COS_UPLOAD_MAX_ATTEMPTS) {
         console.warn(`COS upload attempt ${attempt}/${COS_UPLOAD_MAX_ATTEMPTS} failed; retrying:`, lastError.message);
         await new Promise((resolve) => setTimeout(resolve, attempt * 700));
@@ -370,6 +404,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             owner: data.owner,
             buckets: data.buckets || [],
           });
+          // 服务端已配置时以服务端桶/地域为准，避免浏览器 localStorage 里的旧值把上传导向错误的桶
+          if (data.defaultBucket) setCosBucket(String(data.defaultBucket));
+          if (data.defaultRegion) setCosRegion(String(data.defaultRegion));
         } else {
           setCosStatus({
             configured: false,

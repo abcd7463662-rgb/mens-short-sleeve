@@ -1046,8 +1046,9 @@ async function startServer() {
           configured: true,
           owner: data.Owner?.ID || data.Owner?.DisplayName || '',
           buckets,
-          defaultBucket: process.env.TENCENT_COS_BUCKET || process.env.WOMEN_TENCENT_COS_BUCKET || '',
-          defaultRegion: process.env.TENCENT_COS_REGION || process.env.WOMEN_TENCENT_COS_REGION || 'ap-guangzhou',
+          // 与上传接口保持同一优先级，避免状态接口与实际上传使用不同存储桶
+          defaultBucket: process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '',
+          defaultRegion: process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou',
         });
       });
     } catch (err: any) {
