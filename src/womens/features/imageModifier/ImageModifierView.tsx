@@ -1120,7 +1120,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
               filename: cosFilename,
               bucket: currentBucket,
               region: currentRegion,
-          });
+          }, padRes.blob);
           finalUrl = cosJson.url;
           cosUploadSucceeded = true;
         } catch (cosErr) {
