@@ -1934,7 +1934,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                   className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-40"
                 >
                   <Play className="w-4 h-4 fill-current" />
-                  <span>开始生成 (自动白底填充 1340*1785 + 自动直传腾讯云COS)</span>
+                  <span>开始生成（白底填充 1340×1785 + 自动上传 COS）</span>
                 </button>
               )}
 
