@@ -1478,8 +1478,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     const pendingTasks = tasks.filter((task) => !task.imageUrl.includes('.myqcloud.com'));
     successCount += tasks.length - pendingTasks.length;
     try {
-      // 4 路并发上传，直接发送二进制，省去串行下载与 base64 转换
-      const CONCURRENT_UPLOADS = 4;
+      // 8 路并发上传，直接发送二进制，省去串行下载与 base64 转换
+      const CONCURRENT_UPLOADS = 8;
       let nextIndex = 0;
       const worker = async () => {
         while (nextIndex < pendingTasks.length) {

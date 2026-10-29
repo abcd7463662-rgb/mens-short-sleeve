@@ -56,6 +56,8 @@ const runWithImageSlot = (() => {
   };
 })();
 
+const cosClientCache = new Map<string, any>();
+
 /**
  * COS PutObject 统一封装。
  *
@@ -73,7 +75,13 @@ async function putCosObject(options: {
   body: Buffer;
 }): Promise<{ url: string }> {
   const COS = (await import('cos-nodejs-sdk-v5')).default;
-  const cos = new COS({ SecretId: options.secretId, SecretKey: options.secretKey });
+  // Reuse the SDK client so each image does not repeat connection setup.
+  const clientKey = `${options.secretId}:${options.bucket}:${options.region}`;
+  let cos = cosClientCache.get(clientKey);
+  if (!cos) {
+    cos = new COS({ SecretId: options.secretId, SecretKey: options.secretKey });
+    cosClientCache.set(clientKey, cos);
+  }
   const explicitAcl = String(process.env.COS_OBJECT_ACL || '').trim();
   const params: Record<string, unknown> = {
     Bucket: options.bucket,
