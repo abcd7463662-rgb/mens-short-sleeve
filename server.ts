@@ -57,6 +57,58 @@ const runWithImageSlot = (() => {
 })();
 
 /**
+ * COS PutObject 统一封装。
+ *
+ * 腾讯云文档对 ACL 的说明：不需要对对象单独控权时应设为 default 或留空，
+ * 让对象继承存储桶权限；若存储桶开启了「禁止对象级 ACL」或桶策略不允许
+ * 公有读，请求里带 ACL: public-read 会被直接拒绝（403 AccessDenied）。
+ * 因此这里默认不传 ACL，仅在显式配置 COS_OBJECT_ACL 时才附带。
+ */
+async function putCosObject(options: {
+  secretId: string;
+  secretKey: string;
+  bucket: string;
+  region: string;
+  key: string;
+  body: Buffer;
+}): Promise<{ url: string }> {
+  const COS = (await import('cos-nodejs-sdk-v5')).default;
+  const cos = new COS({ SecretId: options.secretId, SecretKey: options.secretKey });
+  const explicitAcl = String(process.env.COS_OBJECT_ACL || '').trim();
+  const params: Record<string, unknown> = {
+    Bucket: options.bucket,
+    Region: options.region,
+    Key: options.key,
+    Body: options.body,
+    ContentType: 'image/jpeg',
+    CacheControl: 'public, max-age=31536000, immutable',
+  };
+  if (explicitAcl) params.ACL = explicitAcl;
+
+  await new Promise<void>((resolve, reject) => {
+    cos.putObject(params as any, (err: any) => {
+      if (!err) {
+        resolve();
+        return;
+      }
+      const detail = new Error(err.message || '上传腾讯云失败') as Error & {
+        code?: string;
+        statusCode?: number;
+        requestId?: string;
+      };
+      detail.code = err.code;
+      detail.statusCode = err.statusCode;
+      detail.requestId = err.headers?.['x-cos-request-id'];
+      reject(detail);
+    });
+  });
+
+  return {
+    url: `https://${options.bucket}.cos.${options.region}.myqcloud.com/${encodeURIComponent(options.key)}`,
+  };
+}
+
+/**
  * 上架目标模板的持久化存储。
  *
  * Render 的运行时磁盘是临时的，重新部署就被清空，所以真正的长期存储是 GitHub
@@ -1034,25 +1086,17 @@ async function startServer() {
       const safeFilename = path.basename(String(filename || 'image.jpg'));
       const contentHash = createHash('sha256').update(buffer).digest('hex').slice(0, 20);
       const objectKey = `${contentHash}_${safeFilename}`;
-      const COS = (await import('cos-nodejs-sdk-v5')).default;
-      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
-      cos.putObject({
-        Bucket: targetBucket,
-        Region: targetRegion,
-        Key: objectKey,
-        Body: buffer,
-        ContentType: 'image/jpeg',
-        CacheControl: 'public, max-age=31536000, immutable',
-        ACL: 'public-read',
-      }, (err: any) => {
-        if (err) {
-          res.status(500).json({ error: err.message || '上传腾讯云失败', code: err.code });
-          return;
-        }
-        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(objectKey)}`, bucket: targetBucket, region: targetRegion, key: objectKey });
+      const uploaded = await putCosObject({
+        secretId, secretKey, bucket: targetBucket, region: targetRegion, key: objectKey, body: buffer,
       });
+      res.json({ success: true, url: uploaded.url, bucket: targetBucket, region: targetRegion, key: objectKey });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || '上传腾讯云失败' });
+      console.error('[COS upload] failed:', err?.code, err?.statusCode, err?.requestId, err?.message);
+      res.status(500).json({
+        error: err.message || '上传腾讯云失败',
+        code: err?.code,
+        requestId: err?.requestId,
+      });
     }
   });
 
@@ -1079,25 +1123,76 @@ async function startServer() {
       const safeFilename = path.basename(String(req.query.filename || 'image.jpg'));
       const contentHash = createHash('sha256').update(buffer).digest('hex').slice(0, 20);
       const objectKey = `${contentHash}_${safeFilename}`;
-      const COS = (await import('cos-nodejs-sdk-v5')).default;
-      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
-      cos.putObject({
-        Bucket: targetBucket,
-        Region: targetRegion,
-        Key: objectKey,
-        Body: buffer,
-        ContentType: 'image/jpeg',
-        CacheControl: 'public, max-age=31536000, immutable',
-        ACL: 'public-read',
-      }, (err: any) => {
-        if (err) {
-          res.status(500).json({ error: err.message || '上传腾讯云失败', code: err.code });
-          return;
-        }
-        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(objectKey)}`, bucket: targetBucket, region: targetRegion, key: objectKey });
+      const uploaded = await putCosObject({
+        secretId, secretKey, bucket: targetBucket, region: targetRegion, key: objectKey, body: buffer,
       });
+      res.json({ success: true, url: uploaded.url, bucket: targetBucket, region: targetRegion, key: objectKey });
     } catch (err: any) {
-      res.status(500).json({ error: err.message || '上传腾讯云失败' });
+      console.error('[COS upload-binary] failed:', err?.code, err?.statusCode, err?.requestId, err?.message);
+      res.status(500).json({
+        error: err.message || '上传腾讯云失败',
+        code: err?.code,
+        requestId: err?.requestId,
+      });
+    }
+  });
+
+  /**
+   * COS 连通性诊断：用一个 1x1 像素试传，返回真实的错误码与 RequestId，
+   * 便于区分是密钥、地域、桶名、ACL 还是网络问题。
+   */
+  app.get('/api/cos/diagnose', async (req, res) => {
+    const secretId = process.env.TENCENT_COS_SECRET_ID;
+    const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+    const bucket = String(process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
+    const region = String(process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || '').trim();
+    const report: Record<string, unknown> = {
+      hasSecretId: Boolean(secretId),
+      hasSecretKey: Boolean(secretKey),
+      bucket,
+      region,
+      objectAclOverride: process.env.COS_OBJECT_ACL || '(未设置，继承存储桶权限)',
+    };
+    if (!secretId || !secretKey || !bucket) {
+      res.status(400).json({ ...report, success: false, error: '密钥或存储桶未配置完整' });
+      return;
+    }
+    if (!region) {
+      res.status(400).json({ ...report, success: false, error: '缺少地域 Region，例如 ap-guangzhou' });
+      return;
+    }
+    try {
+      const pixel = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64'
+      );
+      const uploaded = await putCosObject({
+        secretId,
+        secretKey,
+        bucket,
+        region,
+        key: `_diagnose/${Date.now()}.png`,
+        body: pixel,
+      });
+      let reachable = false;
+      let httpStatus = 0;
+      try {
+        const head = await fetch(uploaded.url, { method: 'GET', signal: AbortSignal.timeout(8000) });
+        httpStatus = head.status;
+        reachable = head.ok;
+      } catch {
+        reachable = false;
+      }
+      res.json({ ...report, success: true, testUrl: uploaded.url, publicReadable: reachable, httpStatus });
+    } catch (err: any) {
+      res.status(500).json({
+        ...report,
+        success: false,
+        error: err?.message || '上传失败',
+        code: err?.code,
+        httpStatus: err?.statusCode,
+        requestId: err?.requestId,
+      });
     }
   });
 
