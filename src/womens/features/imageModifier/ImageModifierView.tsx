@@ -131,7 +131,11 @@ async function uploadImageToCos(
             body: blob,
             signal: AbortSignal.timeout(60000),
           });
-          if (directResponse.ok) return { success: true, url: sign.url };
+          if (directResponse.ok) {
+            // 上传签名只用于本次 PUT，不能保存到商品数据；永久链接必须去掉签名查询参数。
+            const publicUrl = new URL(sign.url).origin + new URL(sign.url).pathname;
+            return { success: true, url: publicUrl };
+          }
           throw new Error(`COS 直传失败 HTTP ${directResponse.status}`);
         }
       }
