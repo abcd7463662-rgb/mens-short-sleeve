@@ -1166,8 +1166,8 @@ async function startServer() {
         cos = new COS({ SecretId: secretId, SecretKey: secretKey });
         cosClientCache.set(clientKey, cos);
       }
-      const authorization = cos.getAuthorization({ Method: 'PUT', Key: key, Bucket: bucket, Region: region, Expires: 600 });
-      res.json({ success: true, key, authorization, url: `https://${bucket}.cos.${region}.myqcloud.com/${encodeURIComponent(key)}`, expiresIn: 600 });
+      const signedUrl = cos.getObjectUrl({ Method: 'PUT', Key: key, Bucket: bucket, Region: region, Sign: true, Expires: 600, Protocol: 'https:' });
+      res.json({ success: true, key, url: signedUrl, expiresIn: 600 });
     } catch (err: any) {
       res.status(500).json({ error: err.message || '生成 COS 上传签名失败' });
     }

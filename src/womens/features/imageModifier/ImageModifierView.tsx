@@ -124,10 +124,10 @@ async function uploadImageToCos(
       if (blob) {
         const signResponse = await fetch(`/api/cos/upload-sign?filename=${encodeURIComponent(String(payload.filename || 'image.jpg'))}&bucket=${encodeURIComponent(String(payload.bucket || ''))}&region=${encodeURIComponent(String(payload.region || ''))}`, { signal: AbortSignal.timeout(15000) });
         const sign = await signResponse.json().catch(() => ({}));
-        if (signResponse.ok && sign.success && sign.authorization && sign.url) {
+        if (signResponse.ok && sign.success && sign.url) {
           const directResponse = await fetch(sign.url, {
             method: 'PUT',
-            headers: { Authorization: sign.authorization, 'Content-Type': 'image/jpeg' },
+            headers: { 'Content-Type': 'image/jpeg' },
             body: blob,
             signal: AbortSignal.timeout(60000),
           });
