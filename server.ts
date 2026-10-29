@@ -1041,6 +1041,52 @@ async function startServer() {
         Key: objectKey,
         Body: buffer,
         ContentType: 'image/jpeg',
+        CacheControl: 'public, max-age=31536000, immutable',
+        ACL: 'public-read',
+      }, (err: any) => {
+        if (err) {
+          res.status(500).json({ error: err.message || '上传腾讯云失败', code: err.code });
+          return;
+        }
+        res.json({ success: true, url: `https://${targetBucket}.cos.${targetRegion}.myqcloud.com/${encodeURIComponent(objectKey)}`, bucket: targetBucket, region: targetRegion, key: objectKey });
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || '上传腾讯云失败' });
+    }
+  });
+
+  // 二进制直传：避免 base64 膨胀 33%，大图上传更快
+  app.post('/api/cos/upload-binary', express.raw({ type: 'image/*', limit: '15mb' }), async (req, res) => {
+    const secretId = process.env.TENCENT_COS_SECRET_ID;
+    const secretKey = process.env.TENCENT_COS_SECRET_KEY;
+    if (!secretId || !secretKey) {
+      res.status(503).json({ error: '服务端尚未配置腾讯云 COS 密钥' });
+      return;
+    }
+    try {
+      const targetBucket = String(req.query.bucket || process.env.WOMEN_TENCENT_COS_BUCKET || process.env.TENCENT_COS_BUCKET || '').trim();
+      const targetRegion = String(req.query.region || process.env.WOMEN_TENCENT_COS_REGION || process.env.TENCENT_COS_REGION || 'ap-guangzhou').trim();
+      if (!targetBucket) {
+        res.status(400).json({ error: '请配置腾讯云 COS 存储桶' });
+        return;
+      }
+      const buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      if (!buffer.length) {
+        res.status(400).json({ error: '图片数据无效' });
+        return;
+      }
+      const safeFilename = path.basename(String(req.query.filename || 'image.jpg'));
+      const contentHash = createHash('sha256').update(buffer).digest('hex').slice(0, 20);
+      const objectKey = `${contentHash}_${safeFilename}`;
+      const COS = (await import('cos-nodejs-sdk-v5')).default;
+      const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+      cos.putObject({
+        Bucket: targetBucket,
+        Region: targetRegion,
+        Key: objectKey,
+        Body: buffer,
+        ContentType: 'image/jpeg',
+        CacheControl: 'public, max-age=31536000, immutable',
         ACL: 'public-read',
       }, (err: any) => {
         if (err) {

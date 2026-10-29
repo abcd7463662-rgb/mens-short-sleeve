@@ -101,17 +101,31 @@ export interface ProductItem {
 
 const COS_UPLOAD_MAX_ATTEMPTS = 3;
 
-async function uploadImageToCos(payload: Record<string, unknown>): Promise<{ success: true; url: string }> {
+async function uploadImageToCos(
+  payload: Record<string, unknown>,
+  blob?: Blob | null
+): Promise<{ success: true; url: string }> {
   let lastError: Error | null = null;
 
   for (let attempt = 1; attempt <= COS_UPLOAD_MAX_ATTEMPTS; attempt++) {
     try {
-      const response = await fetch('/api/cos/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(60000),
-      });
+      // 有填白后的 Blob 时走二进制直传，避免 base64 体积膨胀
+      const response = blob
+        ? await fetch(
+            `/api/cos/upload-binary?filename=${encodeURIComponent(String(payload.filename || 'image.jpg'))}&bucket=${encodeURIComponent(String(payload.bucket || ''))}&region=${encodeURIComponent(String(payload.region || ''))}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'image/jpeg' },
+              body: blob,
+              signal: AbortSignal.timeout(60000),
+            }
+          )
+        : await fetch('/api/cos/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(60000),
+          });
       const result = await response.json().catch(() => ({}));
       if (response.ok && result.success && result.url) return result;
       throw new Error(result.error || `HTTP ${response.status}`);
@@ -914,6 +928,11 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         const padded = await padImageTo1340x1785(result.imageUrl, 1.0);
         paddedSuccess = true;
         paddedBlob = padded.blob;
+        // 填白完成后先用本地 Blob 预览，无需等待外链或 COS 回源
+        const localPreviewUrl = URL.createObjectURL(padded.blob);
+        setProducts((prev) => prev.map((item) => item.id === productId
+          ? { ...item, [urlKey]: localPreviewUrl, [paddedKey]: true }
+          : item));
 
         // 填白完成后直接上传腾讯云 COS。COS 可用时不再额外写一份服务器托管副本，
         // 避免同一张图的 base64 被连续上传两次而拖慢整体流程。
@@ -927,31 +946,24 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 filename: cosFilename,
                 bucket: currentBucket,
                 region: currentRegion,
-            });
+            }, padded.blob);
             finalImageUrl = cosJson.url;
             console.log(`[Tencent COS Auto-Upload] Success for ${cosFilename}: ${cosJson.url}`);
           } catch (cosErr) {
             console.error('[Tencent COS Auto-Upload failed after retries]:', cosErr);
             cosUploadError = cosErr instanceof Error ? cosErr.message : String(cosErr);
-            onShowToast(`图片已生成，但 COS 上传失败：${cosUploadError}。当前使用临时链接，可稍后点击“同步图片”。`, 'error');
-            finalImageUrl = padded.dataUri;
+            onShowToast(`图片已生成，但 COS 上传失败：${cosUploadError}。请点击“同步图片”重试，导出前必须使用 COS 链接。`, 'error');
+            finalImageUrl = '';
           }
         } else {
-          try {
-            const safeTitle = (product.title || 'product').slice(0, 20).replace(/[/\\?%*:|"<>]/g, '_');
-            const hostedRes = await saveHostedImage(
-              padded.dataUri,
-              `${safeTitle}_${productId}_${color}_1340x1785.JPG`
-            );
-            finalImageUrl = hostedRes?.url || padded.dataUri;
-          } catch (saveErr) {
-            console.warn('Failed to save hosted image, using dataUri:', saveErr);
-            finalImageUrl = padded.dataUri;
-          }
+          cosUploadError = '未配置腾讯云 COS 存储桶';
+          onShowToast('未配置腾讯云 COS，图片无法导出。请先完成 COS 配置。', 'error');
+          finalImageUrl = '';
         }
       } catch (padErr) {
         console.warn('Image padding failed, using raw output:', padErr);
-        finalImageUrl = result.imageUrl;
+        cosUploadError = padErr instanceof Error ? padErr.message : String(padErr);
+        finalImageUrl = '';
       }
 
       // Success
@@ -961,7 +973,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           const updated = {
             ...p,
             [statusKey]: 'success',
-            [urlKey]: finalImageUrl,
+            [urlKey]: finalImageUrl || p[urlKey],
             [paddedKey]: paddedSuccess,
             [errorKey]: undefined,
             cosUploadErrors: cosUploadError
@@ -1204,6 +1216,20 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         onShowToast(`${storeName} 去重历史已收录当前全部商品，没有可导出的新商品。`, 'info');
         return;
       }
+      if (!cosBucket.trim()) {
+        onShowToast('导出必须使用腾讯云 COS 链接，请先配置 COS 存储桶。', 'error');
+        return;
+      }
+      const notUploaded = exportProducts
+        .map((p) => {
+          const missing = [p.whiteUrl, p.blackUrl].filter((url) => !url || !url.includes('.myqcloud.com'));
+          return missing.length ? `「${p.title}」${missing.length === 2 ? '白/黑图' : p.whiteUrl?.includes('.myqcloud.com') ? '黑图' : '白图'}` : '';
+        })
+        .filter(Boolean);
+      if (notUploaded.length) {
+        onShowToast(`以下商品图片尚未上传至 COS，无法导出：${notUploaded.slice(0, 3).join('、')}${notUploaded.length > 3 ? ` 等 ${notUploaded.length} 款` : ''}。请先点击“同步图片”。`, 'error');
+        return;
+      }
       const inputs = exportProducts.map((p) => {
         const cTitle = cleanChineseTitle(p.title || '');
         const eTitle = cleanEnglishTitle(p.englishTitle || cTitle);
@@ -1409,55 +1435,56 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     onShowToast(`正在开始上传 ${tasks.length} 张图片至腾讯云 COS (${targetBucket})...`, 'info');
 
     let successCount = 0;
+    const pendingTasks = tasks.filter((task) => !task.imageUrl.includes('.myqcloud.com'));
+    successCount += tasks.length - pendingTasks.length;
     try {
-      for (let i = 0; i < tasks.length; i++) {
-        const task = tasks[i];
-        setCosUploadProgress({ current: i + 1, total: tasks.length });
+      // 4 路并发上传，直接发送二进制，省去串行下载与 base64 转换
+      const CONCURRENT_UPLOADS = 4;
+      let nextIndex = 0;
+      const worker = async () => {
+        while (nextIndex < pendingTasks.length) {
+          const task = pendingTasks[nextIndex++];
+          setCosUploadProgress({ current: successCount, total: tasks.length });
 
-        // 客户端直接读取高清 Blob 并转换为 Base64，彻底避免外部重定向或权限缺失
-        let clientBase64: string | undefined = undefined;
-        try {
-          if (task.imageUrl.startsWith('data:image/')) {
-            clientBase64 = task.imageUrl;
-          } else {
-            const blobResp = await fetch(task.imageUrl);
-            const blobData = await blobResp.blob();
-            if (blobData && blobData.size > 15000) {
-              clientBase64 = await new Promise<string>((resolve) => {
-                const reader = new FileReader();
-                reader.onloadend = () => resolve(reader.result as string);
-                reader.readAsDataURL(blobData);
-              });
+          let blob: Blob | null = null;
+          try {
+            if (task.imageUrl.startsWith('data:image/')) {
+              blob = await (await fetch(task.imageUrl)).blob();
+            } else {
+              const blobResp = await fetch(task.imageUrl, { signal: AbortSignal.timeout(45000) });
+              if (blobResp.ok) blob = await blobResp.blob();
             }
+          } catch (blobErr) {
+            console.warn('图片下载失败，改由服务端读取链接:', blobErr);
           }
-        } catch (bErr) {
-          console.warn('Client base64 conversion fallback to server resolution:', bErr);
+
+          const resJson = await uploadImageToCos({
+              imageUrl: blob ? undefined : task.imageUrl,
+              filename: task.filename,
+              bucket: targetBucket,
+              region: cosRegion,
+          }, blob);
+
+          const cosUrl = resJson.url;
+          successCount++;
+          setProducts((prev) =>
+            prev.map((item) => {
+              if (item.id !== task.productId) return item;
+              const remainingErrors = { ...item.cosUploadErrors };
+              delete remainingErrors[task.color];
+              const cosUploadErrors = Object.keys(remainingErrors).length ? remainingErrors : undefined;
+              if (task.color === 'white') return { ...item, whiteUrl: cosUrl, cosUploadErrors };
+              if (task.color === 'black') return { ...item, blackUrl: cosUrl, cosUploadErrors };
+              if (task.color === 'apricot') return { ...item, apricotUrl: cosUrl, cosUploadErrors };
+              if (task.color === 'green') return { ...item, greenUrl: cosUrl, cosUploadErrors };
+              return item;
+            })
+          );
+          setCosUploadProgress({ current: successCount, total: tasks.length });
         }
+      };
 
-        const resJson = await uploadImageToCos({
-            imageBase64: clientBase64,
-            imageUrl: task.imageUrl,
-            filename: task.filename,
-            bucket: targetBucket,
-            region: cosRegion,
-        });
-
-        const cosUrl = resJson.url;
-        setProducts((prev) =>
-          prev.map((item) => {
-            if (item.id !== task.productId) return item;
-            const remainingErrors = { ...item.cosUploadErrors };
-            delete remainingErrors[task.color];
-            const cosUploadErrors = Object.keys(remainingErrors).length ? remainingErrors : undefined;
-            if (task.color === 'white') return { ...item, whiteUrl: cosUrl, cosUploadErrors };
-            if (task.color === 'black') return { ...item, blackUrl: cosUrl, cosUploadErrors };
-            if (task.color === 'apricot') return { ...item, apricotUrl: cosUrl, cosUploadErrors };
-            if (task.color === 'green') return { ...item, greenUrl: cosUrl, cosUploadErrors };
-            return item;
-          })
-        );
-        successCount++;
-      }
+      await Promise.all(Array.from({ length: Math.min(CONCURRENT_UPLOADS, pendingTasks.length) }, () => worker()));
 
       onShowToast(`🎉 成功将全部 ${successCount} 张图片同步上传至腾讯云 COS！已生成国内秒开直链并填入系统！`, 'success');
     } catch (err: any) {
