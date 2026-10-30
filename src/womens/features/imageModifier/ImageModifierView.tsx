@@ -720,6 +720,47 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     );
   };
 
+  /**
+   * 人工判定原图颜色：直接把原图链接填入指定颜色位。
+   * 用于不需要 AI 生图、原图本身就是要上架颜色的场景。
+   */
+  const handleUseOriginalForColor = (id: string, color: 'white' | 'black' | 'apricot' | 'green') => {
+    let filledTitle = '';
+    setProducts((prev) =>
+      prev.map((p) => {
+        if (p.id !== id) return p;
+        const url = cleanImageUrlForMerchant(p.imageUrl);
+        if (!url) return p;
+        filledTitle = p.title;
+        const urlKey = `${color}Url` as const;
+        const statusKey = `${color}Status` as const;
+        const paddedKey = `${color}Padded` as const;
+        const errorKey = `${color}Error` as const;
+        return {
+          ...p,
+          [urlKey]: url,
+          [statusKey]: 'success',
+          [paddedKey]: false,
+          [errorKey]: undefined,
+          status: 'success',
+        };
+      })
+    );
+    const colorName = COLOR_CONFIG.find((c) => c.key === color)?.name || color;
+    if (filledTitle) {
+      onShowToast(`已将「${filledTitle}」的原图链接填入【${colorName}】款位置。`, 'success');
+    } else {
+      onShowToast('该商品没有可用的原图链接', 'error');
+    }
+  };
+
+  /** 原图直填的链接同样可以导出，不必先上传 COS。 */
+  const isExportableImageUrl = (url: string | undefined, product: ProductItem) => {
+    if (!url) return false;
+    if (url.includes('.myqcloud.com')) return true;
+    return Boolean(product.imageUrl && url === cleanImageUrlForMerchant(product.imageUrl));
+  };
+
   // --- 1. 商品信息导入 ---
   const handleTableUpload = async (file: File) => {
     try {
@@ -1189,8 +1230,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       if (cosBucket.trim()) {
         const missingCos = [
-          !p.whiteUrl?.includes('.myqcloud.com') ? '白色' : '',
-          !p.blackUrl?.includes('.myqcloud.com') ? '黑色' : '',
+          !isExportableImageUrl(p.whiteUrl, p) ? '白色' : '',
+          !isExportableImageUrl(p.blackUrl, p) ? '黑色' : '',
         ].filter(Boolean);
         if (missingCos.length) {
           onShowToast(`${missingCos.join('、')}图片尚未确认上传到 COS。请先点击“同步全部图片至腾讯云 COS”再导出。`, 'error');
@@ -1280,8 +1321,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       }
       const notUploaded = exportProducts
         .map((p) => {
-          const missing = [p.whiteUrl, p.blackUrl].filter((url) => !url || !url.includes('.myqcloud.com'));
-          return missing.length ? `「${p.title}」${missing.length === 2 ? '白/黑图' : p.whiteUrl?.includes('.myqcloud.com') ? '黑图' : '白图'}` : '';
+          const missing = [p.whiteUrl, p.blackUrl].filter((url) => !isExportableImageUrl(url, p));
+          return missing.length ? `「${p.title}」${missing.length === 2 ? '白/黑图' : isExportableImageUrl(p.whiteUrl, p) ? '黑图' : '白图'}` : '';
         })
         .filter(Boolean);
       if (notUploaded.length) {
@@ -1296,8 +1337,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         let whiteImg = cleanImageUrlForMerchant(p.whiteUrl);
         let blackImg = cleanImageUrlForMerchant(p.blackUrl);
 
-        const hasWhite = Boolean(p.whiteUrl && (!cosBucket.trim() || p.whiteUrl.includes('.myqcloud.com')));
-        const hasBlack = Boolean(p.blackUrl && (!cosBucket.trim() || p.blackUrl.includes('.myqcloud.com')));
+        const hasWhite = Boolean(p.whiteUrl && (!cosBucket.trim() || isExportableImageUrl(p.whiteUrl, p)));
+        const hasBlack = Boolean(p.blackUrl && (!cosBucket.trim() || isExportableImageUrl(p.blackUrl, p)));
         if (!cosBucket.trim() && customCdnPrefix.trim()) {
           let cleanPrefix = customCdnPrefix.trim();
           if (cleanPrefix.endsWith('/')) cleanPrefix = cleanPrefix.slice(0, -1);
@@ -1313,8 +1354,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           blackImg = hasBlack ? getLocalFilePath(localFolderPath, fnBlack, localPathFormat) : '';
         }
 
-        const apricotImg = p.apricotUrl && (!cosBucket.trim() || p.apricotUrl.includes('.myqcloud.com')) ? cleanImageUrlForMerchant(p.apricotUrl) : '';
-        const greenImg = p.greenUrl && (!cosBucket.trim() || p.greenUrl.includes('.myqcloud.com')) ? cleanImageUrlForMerchant(p.greenUrl) : '';
+        const apricotImg = p.apricotUrl && (!cosBucket.trim() || isExportableImageUrl(p.apricotUrl, p)) ? cleanImageUrlForMerchant(p.apricotUrl) : '';
+        const greenImg = p.greenUrl && (!cosBucket.trim() || isExportableImageUrl(p.greenUrl, p)) ? cleanImageUrlForMerchant(p.greenUrl) : '';
 
         return {
           title: cTitle,
@@ -1344,7 +1385,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       await saveSourceUrlsToHStore(exportProducts, storeName);
       downloadTemplateFile(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), fileName);
-      const missingImages = exportProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !url.includes('.myqcloud.com'))).length, 0);
+      const missingImages = exportProducts.reduce((count, p) => count + [p.whiteUrl, p.blackUrl, p.apricotUrl, p.greenUrl].filter((url) => !url || (cosBucket.trim() && !isExportableImageUrl(url, p))).length, 0);
       onShowToast(
         missingImages
           ? `模板已导出；${missingImages} 个未生成或未上传到 COS 的图片链接留空，可稍后重新导出。`
@@ -2365,7 +2406,17 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                 <span className={`${c.headerText} font-mono font-medium truncate text-[9px]`}>
                                   {hasImg ? cellRange : '未就绪'}
                                 </span>
-                                {hasImg && imgUrl && (
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUseOriginalForColor(item.id, c.key)}
+                                    disabled={!item.imageUrl || status === 'running'}
+                                    className="px-1 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[9px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
+                                    title={`把原图链接直接填入${c.name}款，不调用 AI 生图`}
+                                  >
+                                    用原图
+                                  </button>
+                                  {hasImg && imgUrl && (
                                   <button
                                     type="button"
                                     onClick={() => handleDownload1340x1785(imgUrl, item.title, c.key, item.spuCode)}
@@ -2374,7 +2425,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                   >
                                     <Download className="w-3 h-3" />
                                   </button>
-                                )}
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -2598,10 +2650,28 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                             <span className={item.whiteUrl ? 'text-blue-600 font-medium' : 'text-slate-400'}>
                               ⚪ 白图: {item.whiteStatus === 'running' ? '生成中...' : item.whiteUrl ? `已就绪 (${getColorCellRange('white')})` : '未生成'}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => handleUseOriginalForColor(item.id, 'white')}
+                              disabled={!item.imageUrl || item.whiteStatus === 'running'}
+                              className="px-1.5 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[10px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
+                              title="把原图链接直接填入白色款，不调用 AI 生图"
+                            >
+                              白色用原图
+                            </button>
                             <span>•</span>
                             <span className={item.blackUrl ? 'text-zinc-800 font-medium' : 'text-slate-400'}>
                               ⚫ 黑图: {item.blackStatus === 'running' ? '生成中...' : item.blackUrl ? `已就绪 (${getColorCellRange('black')})` : '未生成'}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => handleUseOriginalForColor(item.id, 'black')}
+                              disabled={!item.imageUrl || item.blackStatus === 'running'}
+                              className="px-1.5 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[10px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
+                              title="把原图链接直接填入黑色款，不调用 AI 生图"
+                            >
+                              黑色用原图
+                            </button>
                           </div>
                         </div>
                       </div>
