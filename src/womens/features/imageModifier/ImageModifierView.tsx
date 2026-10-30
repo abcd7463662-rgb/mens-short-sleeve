@@ -229,10 +229,8 @@ export const COLOR_CONFIG: {
   },
 ];
 
-const getRandomColorOrder = (): ColorKey[] => {
-  const arr: ColorKey[] = ['white', 'black'];
-  return arr.sort(() => Math.random() - 0.5);
-};
+/** 默认按黑色上架，用户可在每个商品上改成白色。 */
+const DEFAULT_COLOR_ORDER: ColorKey[] = ['black'];
 
 interface ImageModifierViewProps {
   onShowToast: (msg: string, type?: 'success' | 'info' | 'error') => void;
@@ -692,20 +690,49 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     }
   };
 
-  // --- 切换所有商品的 2 种颜色排布顺序 (白、黑) ---
   const handleShuffleColorOrder = () => {
+    handleBatchSetOriginalColor('black');
+  };
+
+  /** 把全部商品统一判定为一个颜色，并用原图链接填入该颜色位。 */
+  const handleBatchSetOriginalColor = (color: ColorKey) => {
     if (products.length === 0) return;
+    let applied = 0;
     setProducts((prev) =>
       prev.map((p) => {
-        const newOrder = getRandomColorOrder();
+        const url = cleanImageUrlForMerchant(p.imageUrl);
+        if (!url) return p;
+        applied += 1;
+        const cleared: Partial<ProductItem> = {};
+        (['white', 'black'] as const).forEach((key) => {
+          if (key === color) return;
+          Object.assign(cleared, {
+            [`${key}Url`]: undefined,
+            [`${key}Status`]: 'idle',
+            [`${key}Padded`]: false,
+            [`${key}Error`]: undefined,
+          });
+        });
         return {
           ...p,
-          colorOrder: newOrder,
-          firstColor: newOrder[0],
-        };
+          ...cleared,
+          [`${color}Url`]: url,
+          [`${color}Status`]: 'success',
+          [`${color}Padded`]: false,
+          [`${color}Error`]: undefined,
+          firstColor: color,
+          colorOrder: [color],
+          status: 'success',
+        } as ProductItem;
       })
     );
-    onShowToast('已重新随机所有商品的 2 色（白色、黑色）先后排布顺序！', 'success');
+    const colorName = COLOR_CONFIG.find((c) => c.key === color)?.name || color;
+    onShowToast(
+      applied
+        ? `已将全部 ${applied} 款判定为【${colorName}】，并用原图链接填入该颜色位。`
+        : '没有可用的原图链接',
+      applied ? 'success' : 'error'
+    );
   };
 
   // --- 循环切换单个商品的颜色排布顺序 ---
@@ -793,24 +820,25 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       const items: ProductItem[] = res.items.map((it) => {
         const cleanedTitle = cleanChineseTitle(it.title || `商品_${it.rowIndex}`) || `商品_${it.rowIndex}`;
-        const order = getRandomColorOrder();
         return {
           id: it.id,
           title: cleanedTitle,
           imageUrl: it.imageUrl,
-          status: 'idle',
+          status: 'success',
           whiteStatus: 'idle',
-          blackStatus: 'idle',
+          blackStatus: 'success',
           apricotStatus: 'idle',
           greenStatus: 'idle',
-          firstColor: order[0],
-          colorOrder: order,
+          // 默认按黑色上架，原图链接先占黑色位，用户可改成白色
+          blackUrl: cleanImageUrlForMerchant(it.imageUrl) || undefined,
+          firstColor: 'black' as ColorKey,
+          colorOrder: DEFAULT_COLOR_ORDER,
           spuCode: generate018SpuCode(),
         };
       });
 
       setProducts(items);
-      onShowToast(`成功导入商品信息！已自动随机白色、黑色顺序并清理标题，正在调用谷歌翻译...`, 'success');
+      onShowToast(`成功导入商品信息！已默认判定为黑色并填入原图链接，正在调用谷歌翻译...`, 'success');
 
       // 自动触发谷歌翻译 API 异步批量翻译，将英文标题自动填入 D6 / D 列
       void handleTranslateAll(items);
@@ -1988,16 +2016,27 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
 
-              {false && products.length > 0 && (
-                <button
-                  type="button"
-                  onClick={handleShuffleColorOrder}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-purple-50 hover:bg-purple-100 text-purple-700 text-xs sm:text-sm font-semibold border border-purple-200 cursor-pointer shadow-2xs transition-colors"
-                  title="随机重新打乱全部商品的白、黑排布先后顺序"
-                >
-                  <Shuffle className="w-3.5 h-3.5 text-purple-600" />
-                  <span>重新随机双色顺序</span>
-                </button>
+              {products.length > 0 && (
+                <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-2xs">
+                  <button
+                    type="button"
+                    onClick={() => handleBatchSetOriginalColor('black')}
+                    className="inline-flex items-center gap-1 rounded-lg bg-zinc-800 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-zinc-700 cursor-pointer"
+                    title="把全部商品判定为黑色，并用原图链接填入黑色位"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full bg-white/80"></span>
+                    全部黑色
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleBatchSetOriginalColor('white')}
+                    className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                    title="把全部商品改为白色，并用原图链接填入白色位"
+                  >
+                    <span className="w-1.5 h-1.5 rounded-full border border-slate-400 bg-white"></span>
+                    全部白色
+                  </button>
+                </div>
               )}
 
               {false && (
