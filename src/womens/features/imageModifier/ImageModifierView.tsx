@@ -63,6 +63,7 @@ import { executeTemplateGeneration } from '../templateGenerator';
 import { translateTitleWithGoogle, translateBatchTitlesWithGoogle } from '../../utils/translator';
 import { cleanChineseTitle, cleanEnglishTitle } from '../../utils/titleCleaner';
 import { exportCombinedTemplateInWorker } from '../../../features/templateGenerator/combinedExport';
+import { cleanImageUrlForMerchant } from '../../utils/urlCleaner';
 import { repairSportWorkbook } from '../templateGenerator/sportWorkbookRepair';
 import { STORE_NAMES, type StoreName, readStoreHistory, saveStoreHistory, filterDuplicateUrls } from '../../../utils/storeDedup';
 import { deleteTemplateFile, loadTemplateFile, saveTemplateFile, WOMEN_PRODUCT_CATEGORIES, WomenProductCategory } from '../../utils/templateStorage';
@@ -1183,8 +1184,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       const cleanedTitle = cleanChineseTitle(p.title) || p.title;
       const cleanedEng = cleanEnglishTitle(p.englishTitle || cleanedTitle);
 
-      let whiteImg = p.whiteUrl || '';
-      let blackImg = p.blackUrl || '';
+      let whiteImg = cleanImageUrlForMerchant(p.whiteUrl);
+      let blackImg = cleanImageUrlForMerchant(p.blackUrl);
 
       if (cosBucket.trim()) {
         const missingCos = [
@@ -1291,8 +1292,9 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         const cTitle = cleanChineseTitle(p.title || '');
         const eTitle = cleanEnglishTitle(p.englishTitle || cTitle);
 
-        let whiteImg = p.whiteUrl || '';
-        let blackImg = p.blackUrl || '';
+        // 去掉 COS 预签名参数，保证导出的是可长期访问的永久链接
+        let whiteImg = cleanImageUrlForMerchant(p.whiteUrl);
+        let blackImg = cleanImageUrlForMerchant(p.blackUrl);
 
         const hasWhite = Boolean(p.whiteUrl && (!cosBucket.trim() || p.whiteUrl.includes('.myqcloud.com')));
         const hasBlack = Boolean(p.blackUrl && (!cosBucket.trim() || p.blackUrl.includes('.myqcloud.com')));
@@ -1311,8 +1313,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           blackImg = hasBlack ? getLocalFilePath(localFolderPath, fnBlack, localPathFormat) : '';
         }
 
-        const apricotImg = p.apricotUrl && (!cosBucket.trim() || p.apricotUrl.includes('.myqcloud.com')) ? p.apricotUrl : '';
-        const greenImg = p.greenUrl && (!cosBucket.trim() || p.greenUrl.includes('.myqcloud.com')) ? p.greenUrl : '';
+        const apricotImg = p.apricotUrl && (!cosBucket.trim() || p.apricotUrl.includes('.myqcloud.com')) ? cleanImageUrlForMerchant(p.apricotUrl) : '';
+        const greenImg = p.greenUrl && (!cosBucket.trim() || p.greenUrl.includes('.myqcloud.com')) ? cleanImageUrlForMerchant(p.greenUrl) : '';
 
         return {
           title: cTitle,
@@ -2294,7 +2296,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                           const urlKey = `${c.key}Url` as const;
                           const statusKey = `${c.key}Status` as const;
                           const errorKey = `${c.key}Error` as const;
-                          const imgUrl = item[urlKey];
+                          const imgUrl = cleanImageUrlForMerchant(item[urlKey]);
                           const hasImg = Boolean(imgUrl);
                           const cellRange = getColorCellRange(c.key);
                           const status = item[statusKey];
@@ -2506,7 +2508,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                           {COLOR_CONFIG.map((c) => {
                             const urlKey = `${c.key}Url` as const;
                             const statusKey = `${c.key}Status` as const;
-                            const imgUrl = item[urlKey];
+                            const imgUrl = cleanImageUrlForMerchant(item[urlKey]);
                             const hasImg = Boolean(imgUrl);
                             const status = item[statusKey];
 

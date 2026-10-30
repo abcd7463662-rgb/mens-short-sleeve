@@ -22,6 +22,13 @@ export function cleanImageUrlForMerchant(url: string | null | undefined): string
     params.delete('utm_source');
     params.delete('utm_medium');
     params.delete('utm_campaign');
+
+    // COS 直传的预签名参数只对当次 PUT 有效，过期后带参数访问会被拒绝。
+    // 对象本身是公网可读的，去掉签名参数才是可长期使用的图片链接。
+    if (parsed.hostname.endsWith('.myqcloud.com')) {
+      parsed.search = '';
+      parsed.hash = '';
+    }
     
     return parsed.toString();
   } catch (e) {
