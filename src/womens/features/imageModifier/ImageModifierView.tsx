@@ -713,6 +713,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     setProducts((prev) =>
       prev.map((p) => {
         if (p.id !== id) return p;
+        // 只判定了单一颜色的商品不参与顺序轮换，否则会重新引入另一个颜色
+        if (p.colorOrder && p.colorOrder.length === 1) return p;
         const current: ColorKey[] = p.colorOrder && p.colorOrder.length === 2 ? p.colorOrder : ['white', 'black'];
         const rotated: ColorKey[] = [...current.slice(1), current[0]];
         return { ...p, colorOrder: rotated, firstColor: rotated[0] };
@@ -721,10 +723,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   };
 
   /**
-   * 人工判定原图颜色：直接把原图链接填入指定颜色位。
+   * 人工判定原图颜色：每个商品只能保留一个颜色，直接把原图链接填入该颜色位。
    * 用于不需要 AI 生图、原图本身就是要上架颜色的场景。
    */
-  const handleUseOriginalForColor = (id: string, color: 'white' | 'black' | 'apricot' | 'green') => {
+  const handleUseOriginalForColor = (id: string, color: 'white' | 'black') => {
     let filledTitle = '';
     setProducts((prev) =>
       prev.map((p) => {
@@ -732,18 +734,31 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
         const url = cleanImageUrlForMerchant(p.imageUrl);
         if (!url) return p;
         filledTitle = p.title;
-        const urlKey = `${color}Url` as const;
-        const statusKey = `${color}Status` as const;
-        const paddedKey = `${color}Padded` as const;
-        const errorKey = `${color}Error` as const;
-        return {
+        // 只保留选中的颜色，另一个颜色清空，避免同一张原图被填进两个颜色位
+        const cleared: Partial<ProductItem> = {};
+        (['white', 'black', 'apricot', 'green'] as const).forEach((key) => {
+          if (key === color) return;
+          Object.assign(cleared, {
+            [`${key}Url`]: undefined,
+            [`${key}Status`]: 'idle',
+            [`${key}Padded`]: false,
+            [`${key}Error`]: undefined,
+          });
+        });
+        const updated: ProductItem = {
           ...p,
-          [urlKey]: url,
-          [statusKey]: 'success',
-          [paddedKey]: false,
-          [errorKey]: undefined,
+          ...cleared,
+          ...{
+            [`${color}Url`]: url,
+            [`${color}Status`]: 'success',
+            [`${color}Padded`]: false,
+            [`${color}Error`]: undefined,
+          },
+          firstColor: color,
+          colorOrder: [color] as ColorKey[],
           status: 'success',
         };
+        return updated;
       })
     );
     const colorName = COLOR_CONFIG.find((c) => c.key === color)?.name || color;
@@ -759,6 +774,13 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
     if (!url) return false;
     if (url.includes('.myqcloud.com')) return true;
     return Boolean(product.imageUrl && url === cleanImageUrlForMerchant(product.imageUrl));
+  };
+
+  /** 用户为某个商品选定的颜色（原图直填后只剩一个颜色）。 */
+  const getSelectedColors = (product: ProductItem): ColorKey[] => {
+    if (product.colorOrder && product.colorOrder.length > 0) return product.colorOrder;
+    if (product.firstColor) return [product.firstColor];
+    return ['white', 'black'];
   };
 
   // --- 1. 商品信息导入 ---
@@ -1229,12 +1251,12 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       let blackImg = cleanImageUrlForMerchant(p.blackUrl);
 
       if (cosBucket.trim()) {
-        const missingCos = [
-          !isExportableImageUrl(p.whiteUrl, p) ? '白色' : '',
-          !isExportableImageUrl(p.blackUrl, p) ? '黑色' : '',
-        ].filter(Boolean);
+        const selectedColors = getSelectedColors(p);
+        const missingCos = selectedColors
+          .filter((colorKey) => !isExportableImageUrl(p[`${colorKey}Url` as const], p))
+          .map((colorKey) => COLOR_CONFIG.find((c) => c.key === colorKey)?.name || colorKey);
         if (missingCos.length) {
-          onShowToast(`${missingCos.join('、')}图片尚未确认上传到 COS。请先点击“同步全部图片至腾讯云 COS”再导出。`, 'error');
+          onShowToast(`${missingCos.join('、')}款图片尚未就绪，请先选择颜色用原图，或上传到 COS 后再导出。`, 'error');
           return;
         }
       } else if (customCdnPrefix.trim()) {
@@ -1258,8 +1280,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             whiteImageUrl: whiteImg,
             blackImageUrl: blackImg,
             spuCode: p.spuCode,
-            firstColor: p.colorOrder?.[0] || p.firstColor || 'white',
-            colorOrder: p.colorOrder,
+            firstColor: getSelectedColors(p)[0] || 'white',
+            colorOrder: getSelectedColors(p),
           };
       const customFilename = `${(cleanedTitle || `商品_${index + 1}`).replace(/[/\\?%*:|"<>]/g, '_')}_上架模板.xlsx`;
       const rules = productCategory === 'womens-sport-tee'
@@ -1321,8 +1343,10 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
       }
       const notUploaded = exportProducts
         .map((p) => {
-          const missing = [p.whiteUrl, p.blackUrl].filter((url) => !isExportableImageUrl(url, p));
-          return missing.length ? `「${p.title}」${missing.length === 2 ? '白/黑图' : isExportableImageUrl(p.whiteUrl, p) ? '黑图' : '白图'}` : '';
+          const missing = getSelectedColors(p)
+            .filter((colorKey) => !isExportableImageUrl(p[`${colorKey}Url` as const], p))
+            .map((colorKey) => `${COLOR_CONFIG.find((c) => c.key === colorKey)?.name || colorKey}图`);
+          return missing.length ? `「${p.title}」${missing.join('、')}` : '';
         })
         .filter(Boolean);
       if (notUploaded.length) {
@@ -1365,8 +1389,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
           blackImageUrl: blackImg,
           apricotImageUrl: apricotImg,
           greenImageUrl: greenImg,
-          firstColor: p.colorOrder?.[0] || p.firstColor || 'white',
-          colorOrder: p.colorOrder,
+          firstColor: getSelectedColors(p)[0] || 'white',
+          colorOrder: getSelectedColors(p),
         };
       });
 
@@ -2411,10 +2435,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                                     type="button"
                                     onClick={() => handleUseOriginalForColor(item.id, c.key)}
                                     disabled={!item.imageUrl || status === 'running'}
-                                    className="px-1 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[9px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
-                                    title={`把原图链接直接填入${c.name}款，不调用 AI 生图`}
+                                    className={`px-1 py-0.2 rounded border text-[9px] disabled:opacity-40 cursor-pointer ${
+                                      item[`${c.key}Url` as const] === cleanImageUrlForMerchant(item.imageUrl) && item[`${c.key}Url` as const]
+                                        ? 'border-blue-400 bg-blue-50 text-blue-700 font-semibold'
+                                        : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600'
+                                    }`}
+                                    title={`把这个商品判定为${c.name}款，原图链接直接填入该颜色位`}
                                   >
-                                    用原图
+                                    {item[`${c.key}Url` as const] === cleanImageUrlForMerchant(item.imageUrl) && item[`${c.key}Url` as const] ? '已选' : '用原图'}
                                   </button>
                                   {hasImg && imgUrl && (
                                   <button
@@ -2654,10 +2682,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                               type="button"
                               onClick={() => handleUseOriginalForColor(item.id, 'white')}
                               disabled={!item.imageUrl || item.whiteStatus === 'running'}
-                              className="px-1.5 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[10px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
-                              title="把原图链接直接填入白色款，不调用 AI 生图"
+                              className={`px-1.5 py-0.2 rounded border text-[10px] disabled:opacity-40 cursor-pointer ${
+                                item.whiteUrl && item.whiteUrl === cleanImageUrlForMerchant(item.imageUrl)
+                                  ? 'border-blue-400 bg-blue-50 text-blue-700 font-semibold'
+                                  : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600'
+                              }`}
+                              title="把这个商品判定为白色款，原图链接直接填入该颜色位"
                             >
-                              白色用原图
+                              {item.whiteUrl && item.whiteUrl === cleanImageUrlForMerchant(item.imageUrl) ? '已选白色' : '白色用原图'}
                             </button>
                             <span>•</span>
                             <span className={item.blackUrl ? 'text-zinc-800 font-medium' : 'text-slate-400'}>
@@ -2667,10 +2699,14 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                               type="button"
                               onClick={() => handleUseOriginalForColor(item.id, 'black')}
                               disabled={!item.imageUrl || item.blackStatus === 'running'}
-                              className="px-1.5 py-0.2 rounded border border-slate-200 bg-white text-slate-500 text-[10px] hover:border-blue-300 hover:text-blue-600 disabled:opacity-40 cursor-pointer"
-                              title="把原图链接直接填入黑色款，不调用 AI 生图"
+                              className={`px-1.5 py-0.2 rounded border text-[10px] disabled:opacity-40 cursor-pointer ${
+                                item.blackUrl && item.blackUrl === cleanImageUrlForMerchant(item.imageUrl)
+                                  ? 'border-zinc-500 bg-zinc-100 text-zinc-900 font-semibold'
+                                  : 'border-slate-200 bg-white text-slate-500 hover:border-blue-300 hover:text-blue-600'
+                              }`}
+                              title="把这个商品判定为黑色款，原图链接直接填入该颜色位"
                             >
-                              黑色用原图
+                              {item.blackUrl && item.blackUrl === cleanImageUrlForMerchant(item.imageUrl) ? '已选黑色' : '黑色用原图'}
                             </button>
                           </div>
                         </div>
