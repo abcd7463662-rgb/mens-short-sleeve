@@ -314,6 +314,50 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   // 3. 处理与导出状态 (支持最高 12 并发，与后端生图队列对齐)
   const CONCURRENCY = 12;
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  // 颜色模式：'ai' 走原来的 AI 双色生图，'original' 走原图直填单色
+  const [colorMode, setColorMode] = useState<'ai' | 'original'>(() => {
+    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('WOMEN_COLOR_MODE') : null;
+    return stored === 'original' ? 'original' : 'ai';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('WOMEN_COLOR_MODE', colorMode);
+  }, [colorMode]);
+
+  /** 切换颜色模式：AI 模式恢复白黑两色待生成；原图模式收敛为单色。 */
+  const switchColorMode = (mode: 'ai' | 'original') => {
+    if (mode === colorMode) return;
+    setColorMode(mode);
+    setProducts((prev) =>
+      prev.map((p) => {
+        if (mode === 'original') {
+          const color: ColorKey = p.firstColor === 'white' ? 'white' : 'black';
+          const url = cleanImageUrlForMerchant(p.imageUrl);
+          return {
+            ...p,
+            firstColor: color,
+            colorOrder: [color],
+            whiteUrl: color === 'white' ? url || p.whiteUrl : undefined,
+            blackUrl: color === 'black' ? url || p.blackUrl : undefined,
+            whiteStatus: color === 'white' ? 'success' : 'idle',
+            blackStatus: color === 'black' ? 'success' : 'idle',
+          };
+        }
+        // 回到 AI 模式：清掉原图直填留下的链接，重新等待生成
+        const isOriginalLink = (url?: string) => Boolean(url && p.imageUrl && url === cleanImageUrlForMerchant(p.imageUrl));
+        return {
+          ...p,
+          colorOrder: ['black', 'white'] as ColorKey[],
+          firstColor: 'black' as ColorKey,
+          whiteUrl: isOriginalLink(p.whiteUrl) ? undefined : p.whiteUrl,
+          blackUrl: isOriginalLink(p.blackUrl) ? undefined : p.blackUrl,
+          whiteStatus: isOriginalLink(p.whiteUrl) ? 'idle' : p.whiteStatus,
+          blackStatus: isOriginalLink(p.blackUrl) ? 'idle' : p.blackStatus,
+          status: 'idle' as const,
+        };
+      })
+    );
+  };
   const [isBatchExporting, setIsBatchExporting] = useState<boolean>(false);
   const [isRepairingSportWorkbook, setIsRepairingSportWorkbook] = useState(false);
   const [batchExportPhase, setBatchExportPhase] = useState('');
@@ -800,6 +844,8 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
   const isExportableImageUrl = (url: string | undefined, product: ProductItem) => {
     if (!url) return false;
     if (url.includes('.myqcloud.com')) return true;
+    // AI 生图模式要求 COS 链接；只有原图直填模式才接受原图地址
+    if (colorMode !== 'original') return false;
     return Boolean(product.imageUrl && url === cleanImageUrlForMerchant(product.imageUrl));
   };
 
@@ -820,25 +866,44 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
 
       const items: ProductItem[] = res.items.map((it) => {
         const cleanedTitle = cleanChineseTitle(it.title || `商品_${it.rowIndex}`) || `商品_${it.rowIndex}`;
-        return {
+        const base = {
           id: it.id,
           title: cleanedTitle,
           imageUrl: it.imageUrl,
-          status: 'success',
-          whiteStatus: 'idle',
-          blackStatus: 'success',
-          apricotStatus: 'idle',
-          greenStatus: 'idle',
-          // 默认按黑色上架，原图链接先占黑色位，用户可改成白色
-          blackUrl: cleanImageUrlForMerchant(it.imageUrl) || undefined,
-          firstColor: 'black' as ColorKey,
-          colorOrder: DEFAULT_COLOR_ORDER,
           spuCode: generate018SpuCode(),
+          apricotStatus: 'idle' as const,
+          greenStatus: 'idle' as const,
+        };
+        if (colorMode === 'original') {
+          // 原图直填模式：默认按黑色上架，原图链接先占黑色位
+          return {
+            ...base,
+            status: 'success' as const,
+            whiteStatus: 'idle' as const,
+            blackStatus: 'success' as const,
+            blackUrl: cleanImageUrlForMerchant(it.imageUrl) || undefined,
+            firstColor: 'black' as ColorKey,
+            colorOrder: DEFAULT_COLOR_ORDER,
+          };
+        }
+        // AI 生图模式：白黑两色都待生成
+        return {
+          ...base,
+          status: 'idle' as const,
+          whiteStatus: 'idle' as const,
+          blackStatus: 'idle' as const,
+          firstColor: 'black' as ColorKey,
+          colorOrder: ['black', 'white'] as ColorKey[],
         };
       });
 
       setProducts(items);
-      onShowToast(`成功导入商品信息！已默认判定为黑色并填入原图链接，正在调用谷歌翻译...`, 'success');
+      onShowToast(
+        colorMode === 'original'
+          ? '成功导入商品信息！已默认判定为黑色并填入原图链接，正在调用谷歌翻译...'
+          : '成功导入商品信息！已进入 AI 生图模式（白、黑两色），正在调用谷歌翻译...',
+        'success'
+      );
 
       // 自动触发谷歌翻译 API 异步批量翻译，将英文标题自动填入 D6 / D 列
       void handleTranslateAll(items);
@@ -1758,6 +1823,26 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
             <span className={`rounded px-2.5 py-1 font-semibold ${isBatchExporting ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
               4 模板导出 {isBatchExporting ? batchExportPhase || '进行中' : '待导出'}
             </span>
+            <span className="ml-auto inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white p-0.5">
+              <button
+                type="button"
+                onClick={() => switchColorMode('ai')}
+                aria-pressed={colorMode === 'ai'}
+                className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-colors ${colorMode === 'ai' ? 'bg-blue-600 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                title="使用 AI 生成白、黑两色图片并上传 COS"
+              >
+                AI 生图
+              </button>
+              <button
+                type="button"
+                onClick={() => switchColorMode('original')}
+                aria-pressed={colorMode === 'original'}
+                className={`rounded px-2 py-0.5 text-[11px] font-semibold transition-colors ${colorMode === 'original' ? 'bg-slate-900 text-white' : 'text-slate-600 hover:bg-slate-100'}`}
+                title="不调用 AI，直接把原图链接填入所选颜色"
+              >
+                原图直填
+              </button>
+            </span>
           </div>
           {(isTranslatingAll || isProcessing) && (
             <div className="mt-2">
@@ -2016,7 +2101,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               )}
 
-              {products.length > 0 && (
+              {products.length > 0 && colorMode === 'original' && (
                 <div className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-0.5 shadow-2xs">
                   <button
                     type="button"
@@ -2108,7 +2193,7 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 </button>
               </div>)}
 
-              {isProcessing ? (
+              {colorMode === 'ai' && (isProcessing ? (
                 <button
                   type="button"
                   onClick={stopProcessing}
@@ -2126,6 +2211,19 @@ export const ImageModifierView: React.FC<ImageModifierViewProps> = ({ onShowToas
                 >
                   <Play className="w-4 h-4 fill-current" />
                   <span>开始生成（白底填充 1340×1785 + 自动上传 COS）</span>
+                </button>
+              ))}
+
+              {colorMode === 'original' && (
+                <button
+                  type="button"
+                  disabled={products.length === 0}
+                  onClick={() => handleBatchSetOriginalColor('black')}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer shadow-xs disabled:opacity-40"
+                  title="不调用 AI，把每款商品原图链接直接填入所选颜色位"
+                >
+                  <ImageIcon className="w-4 h-4" />
+                  <span>一键原图直填（全部黑色）</span>
                 </button>
               )}
 
